@@ -38,11 +38,11 @@ def test_validation() -> None:
         "invalid limit": {"limit": -1},
     }
     for name, filters in cases.items():
-        with patch.object(orders_module.api, "get") as api_get:
+        with patch.object(orders_module, "get_api") as get_api:
             try:
                 get_orders(**filters)
             except ValueError as error:
-                api_get.assert_not_called()
+                get_api.assert_not_called()
                 print(f"SUCCESS: {name} - {error}")
             else:
                 raise AssertionError(f"{name} did not raise ValueError")
