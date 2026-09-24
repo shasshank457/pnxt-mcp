@@ -3,8 +3,9 @@
 import io
 import re
 import sys
+from collections.abc import Callable
 from contextlib import redirect_stdout
-from typing import Any, Callable
+from typing import Any
 
 import requests
 
@@ -27,7 +28,7 @@ def run_test(
     captured = io.StringIO()
     try:
         with redirect_stdout(captured):
-            result = operation()
+            operation()
         output = captured.getvalue()
         url_match = re.search(r"Request URL: (.+)", output)
         status_match = re.search(r"Response status code: (\d+)", output)
@@ -35,15 +36,19 @@ def run_test(
         status = int(status_match.group(1)) if status_match else 200
         passed = (status >= 400) if expect_error else status == 200
         summary = "expected backend error" if expect_error else "request succeeded"
-        print(f"{name} | URL: {url} | HTTP {status} | {'PASS' if passed else 'FAIL'} | {summary}")
+        print(
+            f"{name} | URL: {url} | HTTP {status} | {'PASS' if passed else 'FAIL'} | {summary}"
+        )
         return passed
     except requests.HTTPError as error:
         response = error.response
         status = response.status_code if response is not None else "unknown"
         passed = expect_error and isinstance(status, int) and status >= 400
-        print(f"{name} | URL: {getattr(response, 'url', 'unknown')} | HTTP {status} | {'PASS' if passed else 'FAIL'} | backend error")
+        print(
+            f"{name} | URL: {getattr(response, 'url', 'unknown')} | HTTP {status} | {'PASS' if passed else 'FAIL'} | backend error"
+        )
         return passed
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - test harness reports all backend failures
         print(f"{name} | URL: unknown | HTTP unknown | FAIL | {error}")
         return False
 
@@ -56,7 +61,9 @@ latest = get_products(limit=5, page=1)
 items = product_items(latest)
 
 if not items:
-    print("Product fixture setup | URL: unknown | HTTP unknown | FAIL | no products returned")
+    print(
+        "Product fixture setup | URL: unknown | HTTP unknown | FAIL | no products returned"
+    )
     sys.exit(1)
 
 sample = items[0]

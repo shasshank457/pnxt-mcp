@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import requests
 
-import services.pointnxt_api as pointnxt_api
+from services import pointnxt_api
 from tools import orders as orders_module
 from tools.orders import (
     get_order_by_id,
@@ -82,7 +82,9 @@ def test_order_retrieval() -> None:
     latest = None
     for name, filters in queries.items():
         response = get_orders(**filters)
-        print(f"SUCCESS: {name} ({len(response.get('data', {}).get('items', []))} orders)")
+        print(
+            f"SUCCESS: {name} ({len(response.get('data', {}).get('items', []))} orders)"
+        )
         if latest is None:
             latest = response
 
@@ -141,7 +143,9 @@ def main() -> None:
     requested = sys.argv[1:] or list(sections)
     for name in requested:
         if name not in sections:
-            raise SystemExit(f"Unknown section: {name}. Choose from {', '.join(sections)}")
+            raise SystemExit(
+                f"Unknown section: {name}. Choose from {', '.join(sections)}"
+            )
         print(f"\n--- {name} ---")
         sections[name]()
 

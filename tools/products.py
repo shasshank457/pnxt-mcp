@@ -2,6 +2,7 @@ from typing import Any
 
 from services.pointnxt_api import PointNXTAPI
 
+
 def get_api() -> PointNXTAPI:
     return PointNXTAPI()
 

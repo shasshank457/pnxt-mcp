@@ -1,66 +1,96 @@
 from mcp.server.mcpserver import MCPServer
+
+from prompts import register_prompts
+from services.metrics import get_metrics
+from tools.auth import auth_callback, auth_check
+from tools.auth import authenticate as exchange_session
+from tools.auth import current_user as get_current_user
+from tools.auth import login_with_credentials as login_credentials
+from tools.auth import logout as clear_user_session
 from tools.orders import (
     get_order_by_id as fetch_order_by_id,
+)
+from tools.orders import (
     get_order_stats as fetch_order_stats,
+)
+from tools.orders import (
     get_orders as fetch_orders,
+)
+from tools.orders import (
     get_status_transitions as fetch_status_transitions,
 )
 from tools.products import (
     get_product_by_id as fetch_product_by_id,
+)
+from tools.products import (
     get_product_summary as fetch_product_summary,
+)
+from tools.products import (
     get_products as fetch_products,
 )
 from tools.system import (
     check_authentication as run_authentication_check,
+)
+from tools.system import (
     check_backend_health as run_backend_health_check,
+)
+from tools.system import (
     check_configuration as run_configuration_check,
 )
-from services.metrics import get_metrics
-from tools.auth import (auth_callback, auth_check, authenticate as exchange_session,
-                        login_with_credentials as login_credentials,
-                        current_user as get_current_user, logout as clear_user_session)
-from prompts import register_prompts
 
 # Global MCP server object
 mcp = MCPServer("PointNXT MCP")
 register_prompts(mcp)
 
+
 @mcp.custom_route("/auth/callback", methods=["GET"])
 async def pointnxt_auth_callback(request):
     return await auth_callback(request)
 
+
 @mcp.custom_route("/auth/check", methods=["GET"])
 async def pointnxt_auth_check(request):
     return await auth_check(request)
+
 
 @mcp.tool()
 def current_user():
     """Return the currently authenticated PointNXT user."""
     return get_current_user()
 
+
 @mcp.tool()
 async def auth_status():
     """Return lightweight authentication status without exposing tokens."""
     user = get_current_user()
-    return {"authenticated": user.get("authenticated", False),
-            "user": user.get("user_id"), "email": user.get("email"),
-            "tenant": user.get("tenant_id"),
-            "expires_in_seconds": user.get("expires_in_seconds")}
+    return {
+        "authenticated": user.get("authenticated", False),
+        "user": user.get("user_id"),
+        "email": user.get("email"),
+        "tenant": user.get("tenant_id"),
+        "expires_in_seconds": user.get("expires_in_seconds"),
+    }
+
 
 @mcp.tool(name="authenticate_with_pointnxt", title="Authenticate with PointNXT")
 async def authenticate():
     """Open PointNXT in the browser and sign in without entering credentials here."""
     return await exchange_session()
 
+
 @mcp.tool(name="login_with_credentials", title="Login to PointNXT")
-async def login_with_credentials(email: str, password: str, remember_device: bool = True):
+async def login_with_credentials(
+    email: str, password: str, remember_device: bool = True
+):
     """Authenticate directly with PointNXT email and password."""
     return await login_credentials(email, password, remember_device)
+
 
 @mcp.tool(name="logout_pointnxt", title="Logout from PointNXT")
 async def logout_pointnxt():
     """Log out of the active PointNXT session."""
     return await clear_user_session()
+
 
 @mcp.tool()
 async def get_orders(
@@ -172,6 +202,7 @@ def check_configuration():
 def get_mcp_metrics():
     """Return in-process MCP request and backend performance metrics."""
     return get_metrics()
+
 
 if __name__ == "__main__":
     mcp.run()

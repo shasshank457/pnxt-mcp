@@ -1,11 +1,13 @@
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from services.pointnxt_api import PointNXTAPI
 
+
 def get_api() -> PointNXTAPI:
     return PointNXTAPI()
+
 
 SUPPORTED_ORDER_STATUSES = {
     "PENDING",
@@ -54,12 +56,13 @@ def _validate_order_filters(
             if not isinstance(value, str) or not re.fullmatch(date_pattern, value):
                 raise ValueError(f"{name} must use YYYY-MM-DD format")
             try:
-                datetime.strptime(value, "%Y-%m-%d")
+                datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             except ValueError as error:
                 raise ValueError(f"{name} must use YYYY-MM-DD format") from error
 
     if start_date and end_date and end_date < start_date:
         raise ValueError("end_date cannot be before start_date")
+
 
 async def get_orders(
     limit: int = 10,
@@ -76,7 +79,7 @@ async def get_orders(
     customer_email: str | None = None,
     customer_phone: str | None = None,
     channel_order_id: str | None = None,
-)-> dict[str, Any]:
+) -> dict[str, Any]:
     _validate_order_filters(limit, page, order_status, start_date, end_date)
 
     params = {}
@@ -91,12 +94,7 @@ async def get_orders(
         "customerId": customer_id,
         "dateFrom": start_date,
         "dateTo": end_date,
-        "search": (
-            order_no
-            or customer_email
-            or customer_phone
-            or channel_order_id
-        ),
+        "search": (order_no or customer_email or customer_phone or channel_order_id),
     }
 
     for name, value in optional_params.items():
@@ -112,7 +110,7 @@ async def get_orders_summary(
     end_date: str | None = None,
     page: int | None = None,
     limit: int | None = None,
-)-> dict[str, Any]:
+) -> dict[str, Any]:
     orders_response = await get_orders(
         limit=limit if limit is not None else 10,
         page=page if page is not None else 1,
@@ -147,9 +145,7 @@ async def get_orders_summary(
     return {
         "total_orders": len(orders),
         "total_order_value": total_order_value,
-        "average_order_value": (
-            total_order_value / len(orders) if orders else 0
-        ),
+        "average_order_value": (total_order_value / len(orders) if orders else 0),
         "status_breakdown": status_breakdown,
         "payment_method_breakdown": payment_method_breakdown,
         "top_5_recent_orders": [

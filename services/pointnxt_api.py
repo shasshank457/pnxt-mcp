@@ -1,22 +1,23 @@
-import logging
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from time import perf_counter, sleep
 from uuid import uuid4
 
-import requests
 import httpx
-from services.metrics import record_request
+import requests
+
 from config import (
-    POINTNXT_BASE_URL,
+    DEV_MODE,
     POINTNXT_ACCESS_TOKEN,
+    POINTNXT_BASE_URL,
     POINTNXT_REFRESH_ENDPOINT,
     POINTNXT_REFRESH_TOKEN,
     POINTNXT_TENANT_ID,
-    DEV_MODE,
 )
 from services.auth_session import clear_session, get_session
+from services.metrics import record_request
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ def _structured_log(level: int, event: str, **fields) -> None:
         **fields,
     }
     logger.log(level, json.dumps(payload, separators=(",", ":"), default=str))
+
 
 class PointNXTAPI:
     def __init__(self):
@@ -94,11 +96,16 @@ class PointNXTAPI:
         """Validate authentication with a lightweight authenticated request."""
         session = get_session()
         if not session or not session.is_authenticated():
-            return {"status": "unhealthy", "authenticated": False,
-                    "tenant_id_present": bool(session and session.get_tenant_id()),
-                    "expires_at": session.expires_at.isoformat() if session and session.expires_at else None,
-                    "authentication_mode": "none",
-                    "error": "Please sign in to PointNXT first."}
+            return {
+                "status": "unhealthy",
+                "authenticated": False,
+                "tenant_id_present": bool(session and session.get_tenant_id()),
+                "expires_at": session.expires_at.isoformat()
+                if session and session.expires_at
+                else None,
+                "authentication_mode": "none",
+                "error": "Please sign in to PointNXT first.",
+            }
         started_at = perf_counter()
         try:
             self.get("/commerce/orders", params={"limit": 1, "page": 1})
@@ -106,11 +113,13 @@ class PointNXTAPI:
                 "status": "healthy",
                 "authenticated": True,
                 "tenant_id_present": bool(session.get_tenant_id()),
-                "expires_at": session.expires_at.isoformat() if session.expires_at else None,
+                "expires_at": session.expires_at.isoformat()
+                if session.expires_at
+                else None,
                 "authentication_mode": "browser_session",
                 "latency_ms": round((perf_counter() - started_at) * 1000, 2),
             }
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - diagnostics must normalize all client failures
             return {
                 "status": "unhealthy",
                 "authenticated": False,
@@ -136,9 +145,15 @@ class PointNXTAPI:
                 "authenticated_session": configured["session"],
             },
             "authenticated_session": configured["session"],
-            "authentication_mode": "browser_session" if session_active else ("dev_service_token" if dev_configured else "none"),
-            "tenant_id_present": bool(session and session.get_tenant_id()) if session_active else bool(dev_configured),
-            "expires_at": session.expires_at.isoformat() if session and session.expires_at else None,
+            "authentication_mode": "browser_session"
+            if session_active
+            else ("dev_service_token" if dev_configured else "none"),
+            "tenant_id_present": bool(session and session.get_tenant_id())
+            if session_active
+            else bool(dev_configured),
+            "expires_at": session.expires_at.isoformat()
+            if session and session.expires_at
+            else None,
             "missing": missing,
         }
 
@@ -360,7 +375,7 @@ class PointNXTAPI:
                 )
                 try:
                     self._refresh_access_token()
-                except Exception:
+                except Exception:  # noqa: BLE001 - refresh failures become auth-required errors
                     clear_session()
                     raise RuntimeError("Please sign in to PointNXT first.")
                 return self._request(
@@ -387,7 +402,7 @@ class PointNXTAPI:
 
             try:
                 response.raise_for_status()
-            except requests.HTTPError as error:
+            except requests.HTTPError:
                 _structured_log(
                     logging.ERROR,
                     "pointnxt_request_error",
@@ -399,7 +414,7 @@ class PointNXTAPI:
                     error="http_error",
                     latency_ms=round(elapsed * 1000, 2),
                 )
-                raise error
+                raise
             return response.json()
 
     def get(self, endpoint: str, params: dict | None = None) -> dict:
@@ -469,7 +484,12 @@ class PointNXTAPI:
             )
             response.raise_for_status()
             payload = response.json()
-        except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPError, ValueError) as error:
+        except (
+            httpx.TimeoutException,
+            httpx.ConnectError,
+            httpx.HTTPError,
+            ValueError,
+        ) as error:
             _structured_log(
                 logging.ERROR,
                 "pointnxt_request_error",
@@ -477,7 +497,9 @@ class PointNXTAPI:
                 method="POST",
                 endpoint=self.refresh_endpoint,
                 tenant_id=self.headers["x-tenant-id"],
-                status_code=getattr(response, "status_code", None) if "response" in locals() else None,
+                status_code=getattr(response, "status_code", None)
+                if "response" in locals()
+                else None,
                 error="async token refresh failed",
                 latency_ms=round((perf_counter() - started_at) * 1000, 2),
             )
@@ -524,7 +546,7 @@ class PointNXTAPI:
             if session and session.is_expired() and session.get_refresh_token():
                 try:
                     await self._async_refresh_access_token(client)
-                except Exception:
+                except Exception:  # noqa: BLE001 - refresh failures become auth-required errors
                     clear_session()
                     raise RuntimeError("Please sign in to PointNXT first.")
             self._apply_auth()
@@ -595,20 +617,28 @@ class PointNXTAPI:
 
                 if response.status_code == 401 and _retry_after_refresh:
                     session_before = get_session()
-                    token_before = session_before.get_access_token() if session_before else None
+                    token_before = (
+                        session_before.get_access_token() if session_before else None
+                    )
                     async with self._refresh_lock:
                         session_after = get_session()
-                        if not session_after or session_after.get_access_token() == token_before:
+                        if (
+                            not session_after
+                            or session_after.get_access_token() == token_before
+                        ):
                             try:
                                 await self._async_refresh_access_token(client)
-                            except Exception:
+                            except Exception:  # noqa: BLE001 - refresh failures become auth-required errors
                                 clear_session()
                                 raise RuntimeError("Please sign in to PointNXT first.")
                     return await self._async_request(
                         method, endpoint, _retry_after_refresh=False, **kwargs
                     )
 
-                if response.status_code in retryable_statuses and attempt < max_attempts:
+                if (
+                    response.status_code in retryable_statuses
+                    and attempt < max_attempts
+                ):
                     delay = 2 ** (attempt - 1)
                     _structured_log(
                         logging.WARNING,

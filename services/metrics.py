@@ -1,7 +1,6 @@
 import threading
 from statistics import mean
 
-
 _lock = threading.Lock()
 _latencies_ms: list[float] = []
 _backend_latencies_ms: list[float] = []
