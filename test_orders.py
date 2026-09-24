@@ -7,11 +7,8 @@ example, ``python test_orders.py validation``.
 import asyncio
 import inspect
 import sys
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import requests
-
-from services import pointnxt_api
 from tools import orders as orders_module
 from tools.orders import (
     get_order_by_id,
@@ -28,6 +25,34 @@ def is_tenant_context_error(error: Exception) -> bool:
     response = getattr(error, "response", None)
     response_text = response.text if response is not None else str(error)
     return "tenant.error.tenantRequired" in response_text
+
+
+def mock_orders_api() -> MagicMock:
+    """Build an authenticated-free async API mock for Orders tests."""
+
+    order = {
+        "id": "order-1",
+        "orderNo": "1466",
+        "orderStatus": "PENDING",
+        "grandTotal": 1250,
+        "customer": {"name": "Test Customer", "email": "test@example.com"},
+    }
+    api = MagicMock()
+
+    async def async_get(endpoint: str, params: dict | None = None) -> dict:
+        if endpoint == "/commerce/orders":
+            return {"data": {"items": [order], "total": 1}}
+        if endpoint == "/commerce/orders/stats":
+            return {"data": {"totalOrders": 1, "pendingOrders": 1}}
+        if endpoint == "/commerce/orders/status-transitions":
+            return {"data": []}
+        if endpoint.startswith("/commerce/orders/"):
+            return {"data": order}
+        return {"data": {}}
+
+    api.async_get = AsyncMock(side_effect=async_get)
+    api.get = MagicMock(return_value={"data": {"items": [order]}})
+    return api
 
 
 async def test_validation() -> None:
@@ -50,19 +75,14 @@ async def test_validation() -> None:
                 raise AssertionError(f"{name} did not raise ValueError")
 
 
-def test_connection_failure() -> None:
+async def test_connection_failure() -> None:
     """Verify connection failures are converted into clear runtime errors."""
 
-    with patch.object(
-        pointnxt_api.requests,
-        "request",
-        side_effect=requests.ConnectionError("simulated connection failure"),
-    ):
+    api = mock_orders_api()
+    api.async_get = AsyncMock(side_effect=RuntimeError("simulated connection failure"))
+    with patch.object(orders_module, "get_api", return_value=api):
         try:
-            pointnxt_api.PointNXTAPI().get(
-                "/commerce/orders",
-                params={"limit": 1, "page": 1},
-            )
+            await get_orders(limit=1, page=1)
         except RuntimeError as error:
             print(f"SUCCESS: connection failure - {error}")
         else:
@@ -81,55 +101,46 @@ async def test_order_retrieval() -> None:
             "end_date": "2024-12-31",
         },
     }
-    latest = None
-    for name, filters in queries.items():
-        response = await get_orders(**filters)
-        print(
-            f"SUCCESS: {name} ({len(response.get('data', {}).get('items', []))} orders)"
-        )
-        if latest is None:
-            latest = response
+    with patch.object(orders_module, "get_api", return_value=mock_orders_api()):
+        latest = None
+        for name, filters in queries.items():
+            response = await get_orders(**filters)
+            print(
+                f"SUCCESS: {name} ({len(response.get('data', {}).get('items', []))} orders)"
+            )
+            if latest is None:
+                latest = response
 
-    items = latest.get("data", {}).get("items", []) if latest else []
-    if items:
-        try:
+        items = latest.get("data", {}).get("items", []) if latest else []
+        if items:
             await get_order_by_id(items[0]["id"])
             print("SUCCESS: order by ID")
-        except Exception as error:
-            if is_tenant_context_error(error):
-                print("PENDING: get_order_by_id requires tenant context.")
-            else:
-                raise
 
 
 async def test_summary() -> None:
     """Exercise the business-friendly order summary."""
 
-    for name, filters in {
-        "latest summary": {},
-        "cancelled summary": {"order_status": "CANCELLED"},
-        "date-range summary": {
-            "start_date": "2024-01-01",
-            "end_date": "2024-12-31",
-        },
-    }.items():
-        summary = await get_orders_summary(**filters)
-        print(f"SUCCESS: {name}: {summary}")
+    with patch.object(orders_module, "get_api", return_value=mock_orders_api()):
+        for name, filters in {
+            "latest summary": {},
+            "cancelled summary": {"order_status": "CANCELLED"},
+            "date-range summary": {
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+            },
+        }.items():
+            summary = await get_orders_summary(**filters)
+            print(f"SUCCESS: {name}: {summary}")
 
 
 async def test_metadata() -> None:
     """Exercise statistics and workflow metadata endpoints."""
 
-    try:
+    with patch.object(orders_module, "get_api", return_value=mock_orders_api()):
         await get_order_stats()
         print("SUCCESS: order statistics")
-    except Exception as error:
-        if is_tenant_context_error(error):
-            print("PENDING: get_order_stats requires tenant context.")
-        else:
-            raise
-    await get_status_transitions()
-    print("SUCCESS: status transitions")
+        await get_status_transitions()
+        print("SUCCESS: status transitions")
 
 
 async def main() -> None:
