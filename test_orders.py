@@ -5,6 +5,7 @@ example, ``python test_orders.py validation``.
 """
 
 import asyncio
+import inspect
 import sys
 from unittest.mock import patch
 
@@ -148,7 +149,9 @@ async def main() -> None:
                 f"Unknown section: {name}. Choose from {', '.join(sections)}"
             )
         print(f"\n--- {name} ---")
-        await sections[name]()
+        result = sections[name]()
+        if inspect.isawaitable(result):
+            await result
 
 
 if __name__ == "__main__":
