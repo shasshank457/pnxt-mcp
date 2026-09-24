@@ -4,6 +4,7 @@ Run all sections with ``python test_orders.py`` or one section with, for
 example, ``python test_orders.py validation``.
 """
 
+import asyncio
 import sys
 from unittest.mock import patch
 
@@ -28,7 +29,7 @@ def is_tenant_context_error(error: Exception) -> bool:
     return "tenant.error.tenantRequired" in response_text
 
 
-def test_validation() -> None:
+async def test_validation() -> None:
     """Run invalid-input checks without making backend requests."""
 
     cases = {
@@ -40,7 +41,7 @@ def test_validation() -> None:
     for name, filters in cases.items():
         with patch.object(orders_module, "get_api") as get_api:
             try:
-                get_orders(**filters)
+                await get_orders(**filters)
             except ValueError as error:
                 get_api.assert_not_called()
                 print(f"SUCCESS: {name} - {error}")
@@ -67,7 +68,7 @@ def test_connection_failure() -> None:
             raise AssertionError("connection failure was hidden")
 
 
-def test_order_retrieval() -> None:
+async def test_order_retrieval() -> None:
     """Exercise common order retrieval queries and order details."""
 
     queries = {
@@ -81,7 +82,7 @@ def test_order_retrieval() -> None:
     }
     latest = None
     for name, filters in queries.items():
-        response = get_orders(**filters)
+        response = await get_orders(**filters)
         print(
             f"SUCCESS: {name} ({len(response.get('data', {}).get('items', []))} orders)"
         )
@@ -91,7 +92,7 @@ def test_order_retrieval() -> None:
     items = latest.get("data", {}).get("items", []) if latest else []
     if items:
         try:
-            get_order_by_id(items[0]["id"])
+            await get_order_by_id(items[0]["id"])
             print("SUCCESS: order by ID")
         except Exception as error:
             if is_tenant_context_error(error):
@@ -100,7 +101,7 @@ def test_order_retrieval() -> None:
                 raise
 
 
-def test_summary() -> None:
+async def test_summary() -> None:
     """Exercise the business-friendly order summary."""
 
     for name, filters in {
@@ -111,26 +112,26 @@ def test_summary() -> None:
             "end_date": "2024-12-31",
         },
     }.items():
-        summary = get_orders_summary(**filters)
+        summary = await get_orders_summary(**filters)
         print(f"SUCCESS: {name}: {summary}")
 
 
-def test_metadata() -> None:
+async def test_metadata() -> None:
     """Exercise statistics and workflow metadata endpoints."""
 
     try:
-        get_order_stats()
+        await get_order_stats()
         print("SUCCESS: order statistics")
     except Exception as error:
         if is_tenant_context_error(error):
             print("PENDING: get_order_stats requires tenant context.")
         else:
             raise
-    get_status_transitions()
+    await get_status_transitions()
     print("SUCCESS: status transitions")
 
 
-def main() -> None:
+async def main() -> None:
     """Run all sections or the section named on the command line."""
 
     sections = {
@@ -147,8 +148,8 @@ def main() -> None:
                 f"Unknown section: {name}. Choose from {', '.join(sections)}"
             )
         print(f"\n--- {name} ---")
-        sections[name]()
+        await sections[name]()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
