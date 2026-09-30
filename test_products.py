@@ -67,6 +67,7 @@ async def main() -> int:
         sample = items[0]
         sample_id = sample["id"]
         operations = [
+            ("Default pagination", lambda: get_products()),
             ("Latest products", lambda: get_products(limit=5, page=1)),
             ("Pagination", lambda: get_products(limit=5, page=1)),
             ("Search by SKU", lambda: get_products(sku=sample.get("sku"))),

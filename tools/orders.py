@@ -26,6 +26,7 @@ SUPPORTED_ORDER_STATUSES = {
     "DISPUTED",
     "CLOSED",
 }
+MAX_ORDER_PAGE_SIZE = 100
 
 
 def _validate_order_filters(
@@ -37,6 +38,8 @@ def _validate_order_filters(
 ) -> None:
     if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
         raise ValueError("limit must be a positive integer")
+    if limit > MAX_ORDER_PAGE_SIZE:
+        raise ValueError(f"limit must be at most {MAX_ORDER_PAGE_SIZE}")
     if isinstance(page, bool) or not isinstance(page, int) or page <= 0:
         raise ValueError("page must be a positive integer")
 
@@ -143,6 +146,14 @@ async def get_orders_summary(
     )[:5]
 
     return {
+        "found": bool(orders),
+        "period": {"start_date": start_date, "end_date": end_date},
+        "pagination": {
+            "page": page if page is not None else 1,
+            "limit": limit if limit is not None else 10,
+            "returned": len(orders),
+            "total": data.get("totalItems", data.get("total", len(orders))),
+        },
         "total_orders": len(orders),
         "total_order_value": total_order_value,
         "average_order_value": (total_order_value / len(orders) if orders else 0),
@@ -158,6 +169,112 @@ async def get_orders_summary(
             for order in recent_orders
         ],
     }
+
+
+async def search_orders(
+    limit: int = 20,
+    page: int = 1,
+    order_reference: str | None = None,
+    customer_name: str | None = None,
+    customer_email: str | None = None,
+    customer_phone: str | None = None,
+    order_status: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    payment_method: str | None = None,
+    channel_id: str | None = None,
+    seller_id: str | None = None,
+    warehouse_id: str | None = None,
+    customer_id: str | None = None,
+    channel_order_id: str | None = None,
+) -> dict[str, Any]:
+    """Search orders using the existing PointNXT order-list endpoint.
+
+    PointNXT exposes one combined order search parameter, so customer_name is
+    passed through the same backend search field as the other text searches.
+    """
+    result = await get_orders(
+        limit=limit,
+        page=page,
+        order_status=order_status,
+        payment_method=payment_method,
+        channel_id=channel_id,
+        seller_id=seller_id,
+        warehouse_id=warehouse_id,
+        customer_id=customer_id,
+        start_date=start_date,
+        end_date=end_date,
+        order_no=order_reference or customer_name,
+        customer_email=customer_email,
+        customer_phone=customer_phone,
+        channel_order_id=channel_order_id,
+    )
+    data = result.get("data", {})
+    items = data.get("items", []) or []
+    return {
+        "found": bool(items),
+        "pagination": data.get("metadata", {}),
+        "orders": [
+            {
+                "id": order.get("id"),
+                "order_number": order.get("orderNo"),
+                "channel_order_number": order.get("channelOrderNo"),
+                "order_date": order.get("orderDate"),
+                "status": order.get("orderStatus"),
+                "customer": order.get("customer"),
+                "total": order.get("grandTotal", order.get("orderTotal")),
+                "currency": order.get("currency"),
+            }
+            for order in items
+        ],
+    }
+
+
+def _compact_order(order: dict[str, Any]) -> dict[str, Any]:
+    """Keep detailed order responses useful to an LLM without losing fields."""
+    return {
+        "id": order.get("id"),
+        "order_number": order.get("orderNo"),
+        "channel_order_number": order.get("channelOrderNo"),
+        "order_date": order.get("orderDate"),
+        "status": order.get("orderStatus"),
+        "customer": order.get("customer"),
+        "items": order.get("orderItems", []),
+        "payment": {
+            "method": order.get("paymentMethod"),
+            "total": order.get("grandTotal", order.get("orderTotal")),
+            "paid": order.get("paidAmount"),
+            "refunded": order.get("refundAmount"),
+            "currency": order.get("currency"),
+        },
+        "fulfillment": {
+            "channel_status": order.get("channelOrderStatus"),
+            "warehouse": order.get("warehouse"),
+            "shipments": order.get("shipments", []),
+            "address_validation_status": order.get("addressValidationStatus"),
+        },
+        "returns": {
+            "returned_at": order.get("returnedAt"),
+            "return_reason": order.get("returnReason"),
+        },
+    }
+
+
+async def get_order(order_reference: str) -> dict[str, Any]:
+    """Retrieve a detailed order by internal ID or display/reference number."""
+    if not isinstance(order_reference, str) or not order_reference.strip():
+        raise ValueError("order_reference must be a non-empty string")
+
+    reference = order_reference.strip()
+    if reference.startswith("#"):
+        reference = reference[1:]
+    search = await get_orders(limit=1, page=1, order_no=reference)
+    items = search.get("data", {}).get("items", []) or []
+    if not items:
+        return {"found": False, "order": None, "message": "No matching order found."}
+    detail = await get_order_by_id(items[0]["id"])
+    order = detail.get("data", detail)
+    return {"found": True, "order": _compact_order(order)}
 
 
 async def get_order_by_id(order_id: str) -> dict[str, Any]:

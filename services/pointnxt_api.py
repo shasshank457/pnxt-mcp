@@ -22,6 +22,19 @@ from services.metrics import record_request
 logger = logging.getLogger(__name__)
 
 
+def _safe_params(params: dict | None) -> dict:
+    """Redact searchable PII and credential-like values before logging."""
+    import hashlib
+    sensitive = ("email", "phone", "password", "token", "authorization", "secret", "search")
+    result = {}
+    for key, value in (params or {}).items():
+        if any(part in key.lower() for part in sensitive):
+            result[key] = "sha256:" + hashlib.sha256(str(value).encode()).hexdigest()[:12]
+        else:
+            result[key] = value
+    return result
+
+
 def _structured_log(level: int, event: str, **fields) -> None:
     """Write a JSON-formatted log entry without including credentials."""
     payload = {
@@ -261,7 +274,7 @@ class PointNXTAPI:
 
         self._apply_auth()
         params = kwargs.get("params")
-        log_params = params if params else {}
+        log_params = _safe_params(params)
         kwargs.setdefault("timeout", 30)
         max_attempts = 3
         retryable_statuses = {502, 503, 504}
@@ -560,7 +573,7 @@ class PointNXTAPI:
                     method=method,
                     endpoint=endpoint,
                     tenant_id=self.headers["x-tenant-id"],
-                    params=kwargs.get("params", {}),
+                    params=_safe_params(kwargs.get("params")),
                     attempt=attempt,
                     max_attempts=max_attempts,
                 )

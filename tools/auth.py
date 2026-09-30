@@ -16,11 +16,12 @@ from config import (
     POINTNXT_LOGIN_URL,
 )
 from services.auth_session import clear_session, get_session
+from services.request_context import get_request_key, reset_request_key, set_request_key
 from services.auth_session import current_user as session_user
 from services.session_manager import create_authenticated_session
 
 logger = logging.getLogger(__name__)
-_pending: dict[str, tuple[threading.Event, dict]] = {}
+_pending: dict[str, tuple[threading.Event, dict, str | None]] = {}
 _pending_lock = threading.Lock()
 
 
@@ -77,7 +78,7 @@ async def authenticate() -> dict:
             }
         event, values = threading.Event(), {}
         with _pending_lock:
-            _pending[state] = (event, values)
+            _pending[state] = (event, values, get_request_key())
         login_url = f"{POINTNXT_LOGIN_URL}?{urlencode({'redirect_uri': POINTNXT_AUTH_CALLBACK_URL, 'state': state})}"
         logger.info("PointNXT login URL generated")
         return {
@@ -127,7 +128,7 @@ async def auth_callback(request):
             },
             status_code=401,
         )
-    event, result = pending
+    event, result, request_key = pending
     result.update(values)
     logger.info("PointNXT authentication callback state validation passed")
     if (
@@ -167,7 +168,11 @@ async def auth_callback(request):
             },
             status_code=401,
         )
-    create_authenticated_session(values, "browser")
+    token = set_request_key(request_key)
+    try:
+        create_authenticated_session(values, "browser")
+    finally:
+        reset_request_key(token)
     logger.info("PointNXT browser login succeeded")
     logger.info("PointNXT authentication session stored successfully")
     with _pending_lock:

@@ -1,8 +1,11 @@
-"""In-process PointNXT browser-session state."""
+"""MCP-connection-scoped PointNXT browser-session state."""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+from services.request_context import get_request_key
+from services import session_store
 
 
 @dataclass
@@ -64,16 +67,12 @@ class AuthSession:
         }
 
 
-_session: AuthSession | None = None
-
-
 def get_session() -> AuthSession | None:
-    return _session
+    return session_store.get(get_request_key())
 
 
 def clear_session() -> None:
-    global _session
-    _session = None
+    session_store.clear(get_request_key())
 
 
 def set_session(payload: dict[str, Any]) -> AuthSession:
@@ -87,8 +86,7 @@ def set_session(payload: dict[str, Any]) -> AuthSession:
         parsed = (
             datetime.fromisoformat(expiry.replace("Z", "+00:00")) if expiry else None
         )
-    global _session
-    _session = AuthSession(
+    session = AuthSession(
         data.get("accessToken") or data.get("access_token") or "",
         data.get("refreshToken") or data.get("refresh_token") or "",
         data.get("tenantId") or data.get("tenant_id") or "",
@@ -97,13 +95,13 @@ def set_session(payload: dict[str, Any]) -> AuthSession:
         data.get("email"),
         parsed,
     )
-    return _session
+    return session_store.set_(get_request_key(), session)
 
 
 def current_user() -> dict[str, Any]:
     return (
-        _session.as_dict()
-        if _session
+        get_session().as_dict()
+        if get_session()
         else {
             "authenticated": False,
             "email": None,

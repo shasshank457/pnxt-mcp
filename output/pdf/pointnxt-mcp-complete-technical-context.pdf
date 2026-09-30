@@ -1,0 +1,291 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Length 3719 >>
+stream
+BT
+/F1 9 Tf
+48 750 Td
+12 TL
+(PointNXT MCP - Complete Technical Context) Tj T*
+() Tj T*
+(Document scope) Tj T*
+(This document describes the current repository implementation only. It does not invent backend) Tj T*
+(APIs or claim unsupported capabilities.) Tj T*
+() Tj T*
+(1. Project overview) Tj T*
+(PointNXT MCP is a read-only Model Context Protocol server for retrieving PointNXT commerce) Tj T*
+(data through an AI assistant. The architecture is MCP client -> server.py -> domain tools ->) Tj T*
+(services/pointnxt_api.py -> PointNXT backend. It is intended for operational users working) Tj T*
+(with orders, customers, products, inventory summaries, shipments, returns, and business) Tj T*
+(indicators.) Tj T*
+() Tj T*
+(2. Architecture and files) Tj T*
+(server.py creates MCPServer\("PointNXT MCP"\), installs MCPSessionMiddleware, registers prompts,) Tj T*
+(auth routes, and tools. tools/orders.py handles order queries and summaries.) Tj T*
+(tools/customers.py derives customer views from orders. tools/products.py handles catalog and) Tj T*
+(backend-provided inventory fields. tools/shipments.py derives shipment/fulfillment views from) Tj T*
+(orders. tools/returns.py derives return views from orders. tools/business.py composes read-) Tj T*
+(only business summaries. tools/auth.py handles browser and credential login. tools/system.py) Tj T*
+(exposes diagnostics.) Tj T*
+(services/pointnxt_api.py is the shared HTTP client. services/auth_session.py,) Tj T*
+(session_store.py, request_context.py, and mcp_session_middleware.py manage authentication) Tj T*
+(context. services/validation.py contains shared validation. services/metrics.py records) Tj T*
+(process-local metrics. prompts.py registers reporting prompts. Dockerfile/docker-compose.yml) Tj T*
+(provide deployment configuration.) Tj T*
+() Tj T*
+(3. Registered MCP tools) Tj T*
+(Authentication: current_user, auth_status, authenticate_with_pointnxt, login_with_credentials,) Tj T*
+(logout_pointnxt.) Tj T*
+(Orders: get_orders, get_order_by_id, search_orders, get_order, get_orders_summary,) Tj T*
+(get_order_stats, get_status_transitions.) Tj T*
+(Customers: find_customer, get_customer_context.) Tj T*
+(Products: get_products, get_product_by_id, search_products, get_product, get_product_summary.) Tj T*
+(Inventory: search_inventory, get_inventory_summary.) Tj T*
+(Shipments/fulfillment: search_shipments, get_order_shipments, get_fulfillment_queue.) Tj T*
+(Returns: search_returns, get_order_returns.) Tj T*
+(Business: get_business_summary, get_attention_queue.) Tj T*
+(System: check_backend_health, check_authentication, check_configuration, get_mcp_metrics.) Tj T*
+(All commerce tools are read-only. Login, logout, and token refresh modify authentication state) Tj T*
+(only.) Tj T*
+() Tj T*
+(4. Confirmed backend endpoints) Tj T*
+(POST /auth/login; POST /auth/logout; configured refresh endpoint, default /auth/refresh-token;) Tj T*
+(GET /commerce/orders; GET /commerce/orders/{order_id}; GET /commerce/orders/stats; GET) Tj T*
+(/commerce/orders/status-transitions; GET /commerce/products; GET) Tj T*
+(/commerce/products/{product_id}; GET /commerce/products/summary.) Tj T*
+(No dedicated customer, inventory, shipment, return, refund, or analytics endpoint is confirmed) Tj T*
+(in the source.) Tj T*
+() Tj T*
+(5. Orders) Tj T*
+(get_orders is the legacy/raw paginated order query. Supported filters include order status,) Tj T*
+(payment method, channel, seller, warehouse, customer ID, dateFrom/dateTo, order) Tj T*
+(number/reference, customer email, customer phone, and channel order ID. Statuses are validated) Tj T*
+(against the supported PointNXT order status set. Dates use YYYY-MM-DD. Core limits are) Tj T*
+(positive and capped at 100.) Tj T*
+ET
+endstream
+endobj
+3 0 obj
+<< /Length 4289 >>
+stream
+BT
+/F1 9 Tf
+48 750 Td
+12 TL
+(search_orders calls the same order-list endpoint and returns compact LLM-friendly records.) Tj T*
+(get_order_by_id calls the internal-ID endpoint and preserves the raw response. get_order) Tj T*
+(strips a leading # from a display reference, searches the order list, then retrieves detail by) Tj T*
+(returned internal ID. get_orders_summary summarizes the retrieved page with counts,) Tj T*
+(status/payment breakdowns, order value, average order value, pagination, and recent orders.) Tj T*
+(get_order_stats and get_status_transitions directly wrap their confirmed endpoints.) Tj T*
+() Tj T*
+(6. Customers) Tj T*
+(There is no dedicated customer API. find_customer and get_customer_context reuse GET) Tj T*
+(/commerce/orders. Name, email, phone, and customer ID are passed through existing order) Tj T*
+(search/filter behavior. Results are deduplicated by customer ID/contact/name. Multiple) Tj T*
+(candidates are returned rather than silently selecting one. Context includes customer contact) Tj T*
+(data, order history, purchased-item summaries, status counts, and returned order value.) Tj T*
+(Limitations are inherited from order search and pagination; standalone customer statistics are) Tj T*
+(not confirmed.) Tj T*
+() Tj T*
+(7. Products and inventory) Tj T*
+(get_products is the legacy/raw catalog query. Filters are SKU, name, status, barcode, brand,) Tj T*
+(category, channel, vendor, seller, and warehouse. search_products returns compact results and) Tj T*
+(can retrieve by product ID. get_product returns compact detail; get_product_by_id preserves) Tj T*
+(raw detail. get_product_summary wraps the product summary endpoint.) Tj T*
+(There is no dedicated inventory endpoint. search_inventory reads inventory or stocks attached) Tj T*
+(to product records. get_inventory_summary returns the backend product summary. The MCP never) Tj T*
+(assumes available stock equals on-hand minus reserved. If inventory fields are absent,) Tj T*
+(inventory_available is false and the value is unavailable.) Tj T*
+() Tj T*
+(8. Shipments and fulfillment) Tj T*
+(No dedicated shipment API is implemented. search_shipments and get_order_shipments derive) Tj T*
+(stored shipment data from order records, including shipments, warehouse, order status, and) Tj T*
+(channel status. Tracking is stored backend data; no live carrier refresh is performed.) Tj T*
+(get_fulfillment_queue uses PENDING orders and explicitly reports that separate picking/packing) Tj T*
+(queue data is not exposed.) Tj T*
+() Tj T*
+(9. Returns and refunds) Tj T*
+(No dedicated return or refund API is implemented. search_returns uses supported order statuses) Tj T*
+(RETURN_REQUESTED, RETURN_RECEIVED, PARTIALLY_RETURNED, RETURNED, REFUNDED, and) Tj T*
+(PARTIALLY_REFUNDED. get_order_returns searches those statuses for an order and deduplicates) Tj T*
+(results. Return ID, order, customer, status, reason, timestamps, items, quantities,) Tj T*
+(inspection, putaway, stock restoration, refund status, and refund amount are returned only) Tj T*
+(when backend fields exist. Quantities are not locally calculated. Refund execution is not) Tj T*
+(implemented. A completed/returned status does not prove a refund was paid.) Tj T*
+() Tj T*
+(10. Business assistant) Tj T*
+(get_business_summary validates an optional UTC date and composes daily orders, order) Tj T*
+(statistics, and product/inventory summary. It returns as_of, period, order count, status) Tj T*
+(counts, order value, successful backend sections, and safe unavailable sections. Order value) Tj T*
+(is not called profit or collected cash.) Tj T*
+(get_attention_queue composes pending/on-hold/partially fulfilled daily orders, pending) Tj T*
+(fulfillment, pending shipment views, and returns. Each attention category includes a reason) Tj T*
+(and evidence. It does not invent arbitrary priorities, live tracking, channel issues, or) Tj T*
+(inventory risks that the backend cannot support. Composite calls preserve successful sections) Tj T*
+(and use safe error codes for unavailable sections.) Tj T*
+() Tj T*
+(11. Authentication flow) Tj T*
+(Credential login calls POST /auth/login with email and password. Browser login uses PointNXT) Tj T*
+(login URL and state-validated callback at /auth/callback; authorization code exchange also) Tj T*
+ET
+endstream
+endobj
+4 0 obj
+<< /Length 4050 >>
+stream
+BT
+/F1 9 Tf
+48 750 Td
+12 TL
+(uses POST /auth/login. The authentication response supplies access token, refresh token,) Tj T*
+(tenant ID, and optional user/membership/expiry values. API requests use Authorization: Bearer) Tj T*
+(and x-tenant-id. A 401 triggers one refresh request. logout calls POST /auth/logout and clears) Tj T*
+(the current session. /auth/check reports authentication state without tokens.) Tj T*
+() Tj T*
+(12. Session architecture) Tj T*
+(request_context.py stores a ContextVar request key. mcp_session_middleware.py binds each MCP) Tj T*
+(request to its connection session ID. session_store.py stores AuthSession objects by key.) Tj T*
+(auth_session.py reads and writes the session associated with the current key. Stateful MCP) Tj T*
+(connections are isolated by connection key. Known limitation: stateless HTTP has no stable MCP) Tj T*
+(session ID and currently falls back to the shared stdio key. Stateless multi-user deployment) Tj T*
+(is therefore unsafe and requires a future fix. This project does not claim that fix is) Tj T*
+(implemented.) Tj T*
+() Tj T*
+(13. Tenant isolation and authorization) Tj T*
+(Tenant ID comes from the authenticated PointNXT response or controlled development) Tj T*
+(configuration. It is stored with AuthSession and propagated as x-tenant-id. No MCP tool) Tj T*
+(accepts tenantId, so the model cannot directly choose another tenant. The MCP does not) Tj T*
+(implement RBAC, membership checks, role checks, or admin checks. Authorization is delegated to) Tj T*
+(PointNXT backend controls.) Tj T*
+() Tj T*
+(14. Shared API client) Tj T*
+(PointNXTAPI supports synchronous and asynchronous GET, POST, PUT, and DELETE. Read tools use) Tj T*
+(async GET. Requests use JSON headers, bearer authentication, tenant propagation, request IDs,) Tj T*
+(latency metrics, structured logs, timeout handling, and retries for) Tj T*
+(timeout/connection/502/503/504. A 401 performs one refresh and retries once. PII-like) Tj T*
+(parameter values, including generic search, are fingerprinted before logging. Tokens and) Tj T*
+(passwords are not logged.) Tj T*
+() Tj T*
+(15. Validation) Tj T*
+(services/validation.py provides page_limit with maximum 100, optional_text with maximum 200) Tj T*
+(characters, optional_id, and optional_date. Orders and products also retain domain validation.) Tj T*
+(Customer, shipment, return, and business tools use shared validators. Status validation is) Tj T*
+(domain-specific. Boolean values are rejected for numeric pagination where the validator is) Tj T*
+(applied.) Tj T*
+() Tj T*
+(16. Errors and security) Tj T*
+(The client normalizes timeout, connection, HTTP, refresh, and validation failures. No-result) Tj T*
+(responses are explicit. Customer ambiguity returns candidates. Business composite tools return) Tj T*
+(successful sections and unavailable entries with safe error codes: backend_unavailable,) Tj T*
+(authentication_required, request_timeout, and section_failed. Request logs retain timestamp,) Tj T*
+(request ID, method, endpoint, status, attempts, latency, and tenant metadata while) Tj T*
+(fingerprinting sensitive parameters.) Tj T*
+() Tj T*
+(17. Tests) Tj T*
+(test_orders.py covers order validation, retrieval, summaries, stats, transitions, and) Tj T*
+(failures. test_customers.py covers deduplication, context, and ambiguity. test_products.py) Tj T*
+(covers filters, pagination, lookup, summary, and default pagination. test_inventory.py covers) Tj T*
+(inventory views and summaries. test_shipments.py covers stored shipment and fulfillment) Tj T*
+(limitations. test_returns.py covers return statuses/items and refund non-execution.) Tj T*
+(test_business.py covers business summary and attention behavior. test_security.py covers) Tj T*
+(session/tenant helper isolation, safe logging parameters, partial failures, and registered) Tj T*
+(tool names.) Tj T*
+(Remaining test gaps include full stateful HTTP integration, safe stateless HTTP behavior,) Tj T*
+(backend RBAC, real backend contract tests, and end-to-end browser callback testing.) Tj T*
+() Tj T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Length 3256 >>
+stream
+BT
+/F1 9 Tf
+48 750 Td
+12 TL
+(18. Deployment) Tj T*
+(Dockerfile and docker-compose.yml run the server on port 8000. Configuration comes from .env:) Tj T*
+(POINTNXT_BASE_URL, POINTNXT_LOGIN_URL, POINTNXT_AUTH_CALLBACK_URL, POINTNXT_ACCESS_TOKEN,) Tj T*
+(POINTNXT_REFRESH_TOKEN, POINTNXT_REFRESH_ENDPOINT, POINTNXT_TENANT_ID, DEV_MODE, and) Tj T*
+(AUTH_CALLBACK_TIMEOUT. The documented HTTP startup is server.mcp.run\('streamable-http',) Tj T*
+(host='0.0.0.0', port=8000\). External URL and proxy configuration are not fixed by source code.) Tj T*
+() Tj T*
+(19. Current limitations and readiness) Tj T*
+(Implemented: read-only order/product querying, derived customer/shipment/return views, backend) Tj T*
+(inventory summaries, authentication and refresh, tenant header propagation, diagnostics,) Tj T*
+(compact business tools, validation, safe parameter logging, tests, and Docker deployment.) Tj T*
+(Partially implemented/backend-dependent: customer data, shipment detail, returns,) Tj T*
+(inspection/putaway, stock semantics, analytics, authorization.) Tj T*
+(Not implemented: commerce mutations, dedicated customer/inventory/shipment/return/refund APIs,) Tj T*
+(RBAC, live tracking refresh, arbitrary priority ranking.) Tj T*
+(Ready for controlled office testing with trusted users and stateful sessions. Stateful multi-) Tj T*
+(user production still needs end-to-end transport isolation tests and backend authorization) Tj T*
+(confirmation. Stateless multi-user deployment is not ready because of the shared fallback) Tj T*
+(session key.) Tj T*
+() Tj T*
+(20. Design decisions) Tj T*
+(Existing backend services are reused to avoid duplicate business logic. Customer, shipment,) Tj T*
+(and return features are derived from orders because dedicated APIs are not confirmed.) Tj T*
+(Inventory is not calculated locally because backend semantics must control sellable stock. Raw) Tj T*
+(and compact tools coexist for backward compatibility. Write tools were intentionally not) Tj T*
+(added. tenantId is kept out of MCP parameters to prevent model-controlled tenant switching.) Tj T*
+() Tj T*
+(21. Example interactions) Tj T*
+(Find order #1503: search_orders\(order_reference='1503'\), then) Tj T*
+(get_order\(order_reference='#1503'\) for detail. Find Krishna Saraf: find_customer\(name='Krishna) Tj T*
+(Saraf'\), then get_customer_context with a unique candidate. Products matching Laptop:) Tj T*
+(search_products\(name='Laptop'\). Track order: get_order_shipments\(order_reference='#1503'\),) Tj T*
+(which reports stored data only. Returns: get_order_returns\(order_reference='#1503'\). Daily) Tj T*
+(summary: get_business_summary\(\). Attention: get_attention_queue\(\).) Tj T*
+() Tj T*
+(22. Quick reference) Tj T*
+(Important files: server.py; tools/orders.py, customers.py, products.py, shipments.py,) Tj T*
+(returns.py, business.py, auth.py; services/pointnxt_api.py, auth_session.py, session_store.py,) Tj T*
+(request_context.py, mcp_session_middleware.py, validation.py, metrics.py. Confirmed endpoints) Tj T*
+(are auth login/logout/refresh plus commerce orders/products and their stats/summary/status) Tj T*
+(metadata. Main risks are stateless HTTP session fallback, backend-dependent authorization, and) Tj T*
+(missing dedicated domain APIs.) Tj T*
+ET
+endstream
+endobj
+6 0 obj
+<< /Type /Pages /Kids [7 0 R 8 0 R 9 0 R 10 0 R] /Count 4 >>
+endobj
+7 0 obj
+<< /Type /Page /Parent 6 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>
+endobj
+8 0 obj
+<< /Type /Page /Parent 6 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 3 0 R >>
+endobj
+9 0 obj
+<< /Type /Page /Parent 6 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 4 0 R >>
+endobj
+10 0 obj
+<< /Type /Page /Parent 6 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 5 0 R >>
+endobj
+11 0 obj
+<< /Type /Catalog /Pages 6 0 R >>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000009 00000 n 
+0000000079 00000 n 
+0000003850 00000 n 
+0000008191 00000 n 
+0000012293 00000 n 
+0000015601 00000 n 
+0000015677 00000 n 
+0000015803 00000 n 
+0000015929 00000 n 
+0000016055 00000 n 
+0000016182 00000 n 
+trailer
+<< /Size 12 /Root 11 0 R >>
+startxref
+16232
+%%EOF

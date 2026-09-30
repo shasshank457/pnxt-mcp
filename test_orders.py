@@ -12,10 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from tools import orders as orders_module
 from tools.orders import (
     get_order_by_id,
+    get_order,
     get_order_stats,
     get_orders,
     get_orders_summary,
     get_status_transitions,
+    search_orders,
 )
 
 
@@ -133,6 +135,25 @@ async def test_summary() -> None:
             print(f"SUCCESS: {name}: {summary}")
 
 
+async def test_new_order_tools() -> None:
+    """Exercise compact search and detailed order responses."""
+    with patch.object(orders_module, "get_api", return_value=mock_orders_api()):
+        search = await search_orders(customer_email="test@example.com", limit=5)
+        assert search["found"] is True
+        assert search["orders"][0]["order_number"] == "1466"
+
+        detail = await get_order("#1466")
+        assert detail["found"] is True
+        assert detail["order"]["payment"]["total"] == 1250
+
+        empty_api = mock_orders_api()
+        empty_api.async_get = AsyncMock(return_value={"data": {"items": []}})
+        with patch.object(orders_module, "get_api", return_value=empty_api):
+            empty = await get_order("missing")
+            assert empty["found"] is False
+    print("SUCCESS: compact search, detail, and no-result handling")
+
+
 async def test_metadata() -> None:
     """Exercise statistics and workflow metadata endpoints."""
 
@@ -151,6 +172,7 @@ async def main() -> None:
         "connection": test_connection_failure,
         "retrieval": test_order_retrieval,
         "summary": test_summary,
+        "new_tools": test_new_order_tools,
         "metadata": test_metadata,
     }
     requested = sys.argv[1:] or list(sections)
