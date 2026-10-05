@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from services.request_context import get_request_key
 from services import session_store
+from services.request_context import get_request_key
 
 
 @dataclass

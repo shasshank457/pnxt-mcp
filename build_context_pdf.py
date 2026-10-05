@@ -1,5 +1,5 @@
-from pathlib import Path
 import textwrap
+from pathlib import Path
 
 source = Path('generated_context.txt').read_text(encoding='utf-8')
 lines = []

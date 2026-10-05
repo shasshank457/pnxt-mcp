@@ -1,7 +1,7 @@
 from mcp.server.mcpserver import MCPServer
-from services.mcp_session_middleware import MCPSessionMiddleware
 
 from prompts import register_prompts
+from services.mcp_session_middleware import MCPSessionMiddleware
 from services.metrics import get_metrics
 from tools.auth import auth_callback, auth_check
 from tools.auth import authenticate as exchange_session
@@ -10,10 +10,14 @@ from tools.auth import login_with_credentials as login_credentials
 from tools.auth import logout as clear_user_session
 from tools.business import (
     get_attention_queue as fetch_attention_queue,
+)
+from tools.business import (
     get_business_summary as fetch_business_summary,
 )
 from tools.customers import (
     find_customers,
+)
+from tools.customers import (
     get_customer_context as fetch_customer_context,
 )
 from tools.orders import (
@@ -32,10 +36,10 @@ from tools.orders import (
     get_orders_summary as fetch_orders_summary,
 )
 from tools.orders import (
-    search_orders as find_orders,
+    get_status_transitions as fetch_status_transitions,
 )
 from tools.orders import (
-    get_status_transitions as fetch_status_transitions,
+    search_orders as find_orders,
 )
 from tools.products import (
     get_inventory_summary as fetch_inventory_summary,
@@ -54,16 +58,24 @@ from tools.products import (
 )
 from tools.products import (
     search_inventory as find_inventory,
-    search_products as find_products,
 )
-from tools.shipments import (
-    get_fulfillment_queue as fetch_fulfillment_queue,
-    get_order_shipments as fetch_order_shipments,
-    search_shipments as find_shipments,
+from tools.products import (
+    search_products as find_products,
 )
 from tools.returns import (
     get_order_returns as fetch_order_returns,
+)
+from tools.returns import (
     search_returns as find_returns,
+)
+from tools.shipments import (
+    get_fulfillment_queue as fetch_fulfillment_queue,
+)
+from tools.shipments import (
+    get_order_shipments as fetch_order_shipments,
+)
+from tools.shipments import (
+    search_shipments as find_shipments,
 )
 from tools.system import (
     check_authentication as run_authentication_check,

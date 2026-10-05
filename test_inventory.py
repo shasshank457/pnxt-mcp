@@ -3,8 +3,12 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
-from tools.products import get_inventory_summary, get_product, search_inventory, search_products
-
+from tools.products import (
+    get_inventory_summary,
+    get_product,
+    search_inventory,
+    search_products,
+)
 
 PRODUCT = {
     "id": "p1", "sku": "SKU-1", "name": "Test Product", "status": "ACTIVE",

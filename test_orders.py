@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from tools import orders as orders_module
 from tools.orders import (
-    get_order_by_id,
     get_order,
+    get_order_by_id,
     get_order_stats,
     get_orders,
     get_orders_summary,

@@ -1,7 +1,15 @@
 """Bind each MCP request to its transport connection session."""
 from typing import Any
-from mcp.server.context import CallNext, HandlerResult, ServerMiddleware, ServerRequestContext
+
+from mcp.server.context import (
+    CallNext,
+    HandlerResult,
+    ServerMiddleware,
+    ServerRequestContext,
+)
+
 from services.request_context import reset_request_key, set_request_key
+
 
 class MCPSessionMiddleware(ServerMiddleware[Any]):
     async def __call__(self, ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:

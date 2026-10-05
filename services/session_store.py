@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from services.auth_session import AuthSession
 
-_sessions: dict[str, "AuthSession"] = {}
+_sessions: dict[str, AuthSession] = {}
 _lock = RLock()
 
 def get(key: str | None) -> AuthSession | None:
     return _sessions.get(key) if key else None
 
-def set_(key: str | None, session: "AuthSession") -> "AuthSession":
+def set_(key: str | None, session: AuthSession) -> AuthSession:
     if not key:
         raise RuntimeError("No MCP session context is available for authentication")
     with _lock:

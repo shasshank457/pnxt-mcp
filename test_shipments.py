@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 
 from tools.shipments import get_fulfillment_queue, get_order_shipments, search_shipments
 
-
 ORDER = {
     "id": "o1",
     "orderNo": "1503",

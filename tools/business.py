@@ -4,11 +4,11 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from tools.orders import get_orders, get_order_stats
+from services.validation import optional_date
+from tools.orders import get_order_stats, get_orders
 from tools.products import get_product_summary
 from tools.returns import search_returns
 from tools.shipments import get_fulfillment_queue, search_shipments
-from services.validation import optional_date
 
 
 def _items(result: dict[str, Any]) -> list[dict[str, Any]]:

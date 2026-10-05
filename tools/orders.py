@@ -266,8 +266,7 @@ async def get_order(order_reference: str) -> dict[str, Any]:
         raise ValueError("order_reference must be a non-empty string")
 
     reference = order_reference.strip()
-    if reference.startswith("#"):
-        reference = reference[1:]
+    reference = reference.removeprefix("#")
     search = await get_orders(limit=1, page=1, order_no=reference)
     items = search.get("data", {}).get("items", []) or []
     if not items:

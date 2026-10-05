@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from tools.orders import get_orders
 from services.validation import optional_id, optional_text, page_limit
+from tools.orders import get_orders
 
 
 def _customer_from_order(order: dict[str, Any]) -> dict[str, Any]:

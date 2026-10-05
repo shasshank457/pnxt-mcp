@@ -1,7 +1,6 @@
 """Shared validation for read-only MCP filters."""
 import re
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
 
 MAX_FILTER_LENGTH = 200
 MAX_PAGE_SIZE = 100
@@ -31,6 +30,6 @@ def optional_date(value: str | None, name: str) -> None:
     optional_text(value, name)
     if value is not None:
         try:
-            datetime.strptime(value, "%Y-%m-%d")
+            datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError as error:
             raise ValueError(f"{name} must use YYYY-MM-DD format") from error

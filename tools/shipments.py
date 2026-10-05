@@ -2,10 +2,8 @@
 
 from typing import Any
 
-from tools.orders import get_orders
 from services.validation import optional_id, optional_text, page_limit
-from tools.orders import SUPPORTED_ORDER_STATUSES
-
+from tools.orders import SUPPORTED_ORDER_STATUSES, get_orders
 
 MAX_SHIPMENT_PAGE_SIZE = 100
 FULFILLMENT_QUEUE_STATUSES = {"PENDING", "CONFIRMED", "ON_HOLD", "PARTIALLY_FULFILLED"}

@@ -16,8 +16,8 @@ from config import (
     POINTNXT_LOGIN_URL,
 )
 from services.auth_session import clear_session, get_session
-from services.request_context import get_request_key, reset_request_key, set_request_key
 from services.auth_session import current_user as session_user
+from services.request_context import get_request_key, reset_request_key, set_request_key
 from services.session_manager import create_authenticated_session
 
 logger = logging.getLogger(__name__)
