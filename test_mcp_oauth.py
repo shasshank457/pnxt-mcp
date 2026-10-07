@@ -62,7 +62,7 @@ class FakeStream:
     async def __aenter__(self):
         return self.response
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *_args):
         return False
 
 
@@ -82,16 +82,16 @@ class FakeClient:
     responses = []
     requests = []
 
-    def __init__(self, *args, **kwargs):
-        self.kwargs = kwargs
+    def __init__(self, **_kwargs):
+        self.kwargs = _kwargs
 
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *_args):
         return False
 
-    def stream(self, method, url, **kwargs):
+    def stream(self, _method, url, **kwargs):
         self.requests.append((url, kwargs))
         return FakeStream(self.responses.pop(0))
 
