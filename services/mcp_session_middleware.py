@@ -25,9 +25,9 @@ class MCPSessionMiddleware(ServerMiddleware[Any]):
         try:
             protocol_version = request_headers.get("mcp-protocol-version")
             request_session_header_present = bool(request_headers.get("mcp-session-id"))
-            logger.debug(
-                "MCP request method=%s protocol_version=%s request_present=%s "
-                "connection_session_id_present=%s request_session_header_present=%s",
+            logger.info(
+                "MCP incoming method=%s protocol=%s request_present=%s "
+                "session_id_present=%s request_header_session_present=%s",
                 method,
                 protocol_version,
                 request is not None,
@@ -89,7 +89,7 @@ def _log_completion(method: str | None, result: HandlerResult | None) -> None:
         else:
             response_session_header_present = None
             response_protocol_version = None
-        logger.debug(
+        logger.info(
             "MCP request completed method=%s response_status=%s "
             "response_session_header_present=%s response_protocol_version=%s",
             method,

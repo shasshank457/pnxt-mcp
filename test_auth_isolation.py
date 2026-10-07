@@ -73,16 +73,17 @@ async def main() -> None:
     handler = logging.StreamHandler(stream)
     logger = logging.getLogger("services.mcp_session_middleware")
     logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     try:
         assert await _run_diagnostic_request() == {"ok": True}
     finally:
         handler.flush()
         logger.removeHandler(handler)
     diagnostics = stream.getvalue()
-    assert "method=tools/list" in diagnostics
-    assert "protocol_version=2025-11-25" in diagnostics
-    assert "request_session_header_present=True" in diagnostics
+    assert "MCP incoming method=tools/list" in diagnostics
+    assert "protocol=2025-11-25" in diagnostics
+    assert "session_id_present=True" in diagnostics
+    assert "request_header_session_present=True" in diagnostics
     assert "Authorization" not in diagnostics
     assert "diagnostic-token" not in diagnostics
     _log_completion("tools/list", _MalformedResponse())
