@@ -1,6 +1,8 @@
 """Focused regression tests for MCP authentication isolation."""
 
 import asyncio
+import io
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -8,7 +10,7 @@ from types import SimpleNamespace
 from services import session_store
 from services.auth_session import get_session, set_session
 from services.mcp_oauth import MCP_RESOURCE, _hash, validate_bearer
-from services.mcp_session_middleware import MCPSessionMiddleware
+from services.mcp_session_middleware import MCPSessionMiddleware, _log_completion
 from services.pointnxt_api import PointNXTAPI
 from services.request_context import reset_request_key, set_request_key
 from services.session_store import clear_all_for_tests
@@ -40,8 +42,50 @@ async def _run_modern_discovery():
     return await MCPSessionMiddleware()(ctx, callback)
 
 
+async def _run_diagnostic_request():
+    ctx = SimpleNamespace(
+        session=SimpleNamespace(_connection=_Connection("diagnostic-session")),
+        request=SimpleNamespace(
+            headers={
+                "mcp-protocol-version": "2025-11-25",
+                "mcp-session-id": "diagnostic-session",
+            }
+        ),
+        method="tools/list",
+        protocol_version="2025-11-25",
+    )
+
+    async def callback(_):
+        return {"ok": True}
+
+    return await MCPSessionMiddleware()(ctx, callback)
+
+
+class _MalformedResponse:
+    status_code = 500
+    headers = object()
+
+
 async def main() -> None:
     clear_all_for_tests()
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger("services.mcp_session_middleware")
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        assert await _run_diagnostic_request() == {"ok": True}
+    finally:
+        handler.flush()
+        logger.removeHandler(handler)
+    diagnostics = stream.getvalue()
+    assert "method=tools/list" in diagnostics
+    assert "protocol_version=2025-11-25" in diagnostics
+    assert "request_session_header_present=True" in diagnostics
+    assert "Authorization" not in diagnostics
+    assert "diagnostic-token" not in diagnostics
+    _log_completion("tools/list", _MalformedResponse())
 
     async def save_session(ctx):
         set_session({"data": {"accessToken": f"token-{ctx.session._connection.session_id}", "tenantId": f"tenant-{ctx.session._connection.session_id}"}})
