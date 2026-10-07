@@ -16,6 +16,17 @@ class MCPSessionMiddleware(ServerMiddleware[Any]):
     async def __call__(self, ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
         connection = getattr(ctx.session, "_connection", None)
         session_id = getattr(connection, "session_id", None)
+        # The 2026-07-28 Streamable HTTP discovery probe is deliberately
+        # sessionless.  It only negotiates protocol capabilities; it cannot
+        # invoke business tools or access PointNXT data.  Allow that probe so
+        # clients can fall back to the stateful initialize handshake.  Every
+        # other HTTP MCP request still requires a stable transport identity.
+        if (
+            ctx.request is not None
+            and getattr(ctx, "method", None) == "server/discover"
+            and getattr(ctx, "protocol_version", None) == "2026-07-28"
+        ):
+            return await call_next(ctx)
         # A missing HTTP identity must fail closed.  Only an actual non-HTTP
         # stdio request may use the process-local stdio identity.
         if ctx.request is not None:

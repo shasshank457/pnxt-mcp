@@ -27,6 +27,19 @@ async def _run_as(session_id, callback, *, http=True):
     return await MCPSessionMiddleware()(ctx, callback)
 
 
+async def _run_modern_discovery():
+    ctx = SimpleNamespace(
+        session=SimpleNamespace(_connection=_Connection(None)),
+        request=object(),
+        method="server/discover",
+        protocol_version="2026-07-28",
+    )
+    async def callback(_):
+        return "discovery-ok"
+
+    return await MCPSessionMiddleware()(ctx, callback)
+
+
 async def main() -> None:
     clear_all_for_tests()
 
@@ -46,6 +59,11 @@ async def main() -> None:
         assert "stable MCP session identity" in str(error)
     else:
         raise AssertionError("HTTP requests without session identity must fail closed")
+
+    # The modern 2026-07-28 discovery probe is sessionless by protocol. It is
+    # allowed only for capability discovery; normal HTTP MCP requests remain
+    # fail-closed without a stable transport identity.
+    assert await _run_modern_discovery() == "discovery-ok"
 
     # Local stdio remains available for a single-process development transport.
     await _run_as(None, save_session, http=False)
