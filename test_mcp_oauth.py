@@ -185,7 +185,7 @@ async def cimd_tests() -> None:
     old_client, old_redirect = mcp_oauth.MCP_OAUTH_CLIENT_ID, mcp_oauth.MCP_OAUTH_REDIRECT_URI
     mcp_oauth.MCP_OAUTH_CLIENT_ID = "fixed-client"
     mcp_oauth.MCP_OAUTH_REDIRECT_URI = "https://fixed.example/callback"
-    verifier, challenge = verifier_pair()
+    _verifier, challenge = verifier_pair()
     query = "&".join((
         f"client_id={client_id}", f"redirect_uri={redirect}", "state=cimd-state",
         f"code_challenge={challenge}", "code_challenge_method=S256", "scope=mcp", f"resource={mcp_oauth.MCP_RESOURCE}",
