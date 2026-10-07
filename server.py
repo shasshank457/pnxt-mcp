@@ -1,6 +1,23 @@
 from mcp.server.mcpserver import MCPServer
 
 from prompts import register_prompts
+from services import session_store
+from services.mcp_oauth import (
+    authorize as oauth_authorize,
+)
+from services.mcp_oauth import (
+    callback as oauth_callback,
+)
+from services.mcp_oauth import (
+    metadata_authorization_server,
+    metadata_protected_resource,
+)
+from services.mcp_oauth import (
+    revoke as oauth_revoke,
+)
+from services.mcp_oauth import (
+    token as oauth_token,
+)
 from services.mcp_session_middleware import MCPSessionMiddleware
 from services.metrics import get_metrics
 from tools.auth import auth_callback, auth_check
@@ -94,12 +111,44 @@ register_prompts(mcp)
 
 @mcp.custom_route("/auth/callback", methods=["GET"])
 async def pointnxt_auth_callback(request):
+    if session_store.has_oauth_transaction(request.query_params.get("state", "")):
+        return await oauth_callback(request)
     return await auth_callback(request)
 
 
 @mcp.custom_route("/auth/check", methods=["GET"])
 async def pointnxt_auth_check(request):
     return await auth_check(request)
+
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource(request):
+    return await metadata_protected_resource(request)
+
+
+@mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
+async def oauth_authorization_server(request):
+    return await metadata_authorization_server(request)
+
+
+@mcp.custom_route("/oauth/authorize", methods=["GET"])
+async def oauth_authorize_route(request):
+    return await oauth_authorize(request)
+
+
+@mcp.custom_route("/oauth/callback", methods=["GET"])
+async def oauth_callback_route(request):
+    return await oauth_callback(request)
+
+
+@mcp.custom_route("/oauth/token", methods=["POST"])
+async def oauth_token_route(request):
+    return await oauth_token(request)
+
+
+@mcp.custom_route("/oauth/revoke", methods=["POST"])
+async def oauth_revoke_route(request):
+    return await oauth_revoke(request)
 
 
 @mcp.tool()

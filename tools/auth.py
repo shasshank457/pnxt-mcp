@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import secrets
-import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -15,14 +15,13 @@ from config import (
     POINTNXT_BASE_URL,
     POINTNXT_LOGIN_URL,
 )
+from services import session_store
 from services.auth_session import clear_session, get_session
 from services.auth_session import current_user as session_user
 from services.request_context import get_request_key, reset_request_key, set_request_key
 from services.session_manager import create_authenticated_session
 
 logger = logging.getLogger(__name__)
-_pending: dict[str, tuple[threading.Event, dict, str | None]] = {}
-_pending_lock = threading.Lock()
 
 
 def current_user() -> dict:
@@ -76,9 +75,16 @@ async def authenticate() -> dict:
                 "authenticated": False,
                 "message": "PointNXT public authentication callback is not configured.",
             }
-        event, values = threading.Event(), {}
-        with _pending_lock:
-            _pending[state] = (event, values, get_request_key())
+        values = {}
+        session_key = get_request_key()
+        if not session_key:
+            return {"authenticated": False, "message": "No stable MCP session identity is available."}
+        session_store.put_auth_transaction(
+            state,
+            session_key,
+            {},
+            time.monotonic() + AUTH_CALLBACK_TIMEOUT,
+        )
         login_url = f"{POINTNXT_LOGIN_URL}?{urlencode({'redirect_uri': POINTNXT_AUTH_CALLBACK_URL, 'state': state})}"
         logger.info("PointNXT login URL generated")
         return {
@@ -117,8 +123,7 @@ async def auth_callback(request):
             {"authenticated": False, "message": "Missing authentication state."},
             status_code=400,
         )
-    with _pending_lock:
-        pending = _pending.get(state)
+    pending = session_store.consume_auth_transaction(state)
     if pending is None:
         logger.warning("PointNXT authentication callback state validation failed")
         return JSONResponse(
@@ -128,8 +133,7 @@ async def auth_callback(request):
             },
             status_code=401,
         )
-    event, result, request_key = pending
-    result.update(values)
+    request_key, result, _expires_at = pending
     logger.info("PointNXT authentication callback state validation passed")
     if (
         not values.get("accessToken")
@@ -175,9 +179,6 @@ async def auth_callback(request):
         reset_request_key(token)
     logger.info("PointNXT browser login succeeded")
     logger.info("PointNXT authentication session stored successfully")
-    with _pending_lock:
-        _pending.pop(state, None)
-    event.set()
     return JSONResponse(
         {"message": "PointNXT sign-in received. You may close this window."}
     )

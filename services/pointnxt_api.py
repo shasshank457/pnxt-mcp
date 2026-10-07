@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from time import perf_counter, sleep
 from uuid import uuid4
 
@@ -16,8 +16,10 @@ from config import (
     POINTNXT_REFRESH_TOKEN,
     POINTNXT_TENANT_ID,
 )
+from services import session_store
 from services.auth_session import clear_session, get_session
 from services.metrics import record_request
+from services.request_context import get_request_key
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +63,34 @@ class PointNXTAPI:
         }
         self.dev_access_token = access_token
         self.dev_tenant_id = tenant_id
-        self._refresh_lock = asyncio.Lock()
 
     def _apply_auth(self) -> None:
         session = get_session()
         if session and session.is_authenticated():
             logger.info("PointNXT authentication session loaded for API request")
             token, tenant = session.get_access_token(), session.get_tenant_id()
-        elif DEV_MODE and self.dev_access_token and self.dev_tenant_id:
+        elif (
+            DEV_MODE
+            and get_request_key() == "stdio"
+            and self.dev_access_token
+            and self.dev_tenant_id
+        ):
             token, tenant = self.dev_access_token, self.dev_tenant_id
         else:
             raise RuntimeError("Please sign in to PointNXT first.")
         self.headers.update({"Authorization": f"Bearer {token}", "x-tenant-id": tenant})
+
+    @staticmethod
+    def _update_session_tokens(session, data, access_token, refreshed_token) -> None:
+        session.access_token = access_token
+        if refreshed_token:
+            session.refresh_token = refreshed_token
+        expiry = data.get("expiresAt") or data.get("expires_at") or data.get("expiresIn")
+        if isinstance(expiry, (int, float)):
+            session.expires_at = datetime.now(timezone.utc) + timedelta(seconds=expiry)
+        elif expiry:
+            session.expires_at = datetime.fromisoformat(str(expiry).replace("Z", "+00:00"))
+        session_store.set_(get_request_key(), session)
 
     def check_backend_health(self) -> dict:
         """Check whether the configured PointNXT backend is reachable."""
@@ -251,9 +269,7 @@ class PointNXTAPI:
 
         self.headers["Authorization"] = f"Bearer {access_token}"
         if session:
-            session.access_token = access_token
-            if refreshed_token:
-                session.refresh_token = refreshed_token
+            self._update_session_tokens(session, data, access_token, refreshed_token)
         if refreshed_token:
             self.refresh_token = refreshed_token
         _structured_log(
@@ -266,6 +282,14 @@ class PointNXTAPI:
             status_code=response.status_code,
             latency_ms=round((perf_counter() - started_at) * 1000, 2),
         )
+
+    def _refresh_with_lease(self) -> None:
+        key = get_request_key()
+        owner = session_store.acquire_refresh_lease(key)
+        try:
+            self._refresh_access_token()
+        finally:
+            session_store.release_refresh_lease(key, owner)
 
     def _request(
         self, method: str, endpoint: str, _retry_after_refresh: bool = True, **kwargs
@@ -387,7 +411,7 @@ class PointNXTAPI:
                     latency_ms=round(elapsed * 1000, 2),
                 )
                 try:
-                    self._refresh_access_token()
+                    self._refresh_with_lease()
                 except Exception:  # noqa: BLE001 - refresh failures become auth-required errors
                     clear_session()
                     raise RuntimeError("Please sign in to PointNXT first.")
@@ -530,9 +554,7 @@ class PointNXTAPI:
             )
         self.headers["Authorization"] = f"Bearer {access_token}"
         if session:
-            session.access_token = access_token
-            if refreshed_token:
-                session.refresh_token = refreshed_token
+            self._update_session_tokens(session, data, access_token, refreshed_token)
         if refreshed_token:
             self.refresh_token = refreshed_token
 
@@ -547,6 +569,19 @@ class PointNXTAPI:
             latency_ms=round((perf_counter() - started_at) * 1000, 2),
         )
 
+    async def _async_refresh_with_lease(
+        self, client: httpx.AsyncClient, expected_token: str | None = None
+    ) -> None:
+        key = get_request_key()
+        owner = await asyncio.to_thread(session_store.acquire_refresh_lease, key)
+        try:
+            current = get_session()
+            if expected_token and current and current.get_access_token() != expected_token:
+                return
+            await self._async_refresh_access_token(client)
+        finally:
+            await asyncio.to_thread(session_store.release_refresh_lease, key, owner)
+
     async def _async_request(
         self, method: str, endpoint: str, _retry_after_refresh: bool = True, **kwargs
     ) -> dict:
@@ -558,7 +593,7 @@ class PointNXTAPI:
             session = get_session()
             if session and session.is_expired() and session.get_refresh_token():
                 try:
-                    await self._async_refresh_access_token(client)
+                    await self._async_refresh_with_lease(client)
                 except Exception:  # noqa: BLE001 - refresh failures become auth-required errors
                     clear_session()
                     raise RuntimeError("Please sign in to PointNXT first.")
@@ -633,17 +668,11 @@ class PointNXTAPI:
                     token_before = (
                         session_before.get_access_token() if session_before else None
                     )
-                    async with self._refresh_lock:
-                        session_after = get_session()
-                        if (
-                            not session_after
-                            or session_after.get_access_token() == token_before
-                        ):
-                            try:
-                                await self._async_refresh_access_token(client)
-                            except Exception:  # noqa: BLE001 - refresh failures become auth-required errors
-                                clear_session()
-                                raise RuntimeError("Please sign in to PointNXT first.")
+                    try:
+                        await self._async_refresh_with_lease(client, token_before)
+                    except Exception:  # noqa: BLE001 - refresh failures become auth-required errors
+                        clear_session()
+                        raise RuntimeError("Please sign in to PointNXT first.")
                     return await self._async_request(
                         method, endpoint, _retry_after_refresh=False, **kwargs
                     )

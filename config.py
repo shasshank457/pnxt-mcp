@@ -16,3 +16,13 @@ POINTNXT_REFRESH_ENDPOINT = os.getenv(
 )
 POINTNXT_TENANT_ID = os.getenv("POINTNXT_TENANT_ID")
 AUTH_CALLBACK_TIMEOUT = int(os.getenv("AUTH_CALLBACK_TIMEOUT", "180"))
+MCP_PUBLIC_BASE_URL = os.getenv("MCP_PUBLIC_BASE_URL", "https://mcp.pointnxt.com")
+MCP_OAUTH_CLIENT_ID = os.getenv("MCP_OAUTH_CLIENT_ID", "claude")
+MCP_OAUTH_REDIRECT_URI = os.getenv("MCP_OAUTH_REDIRECT_URI", "")
+MCP_OAUTH_CODE_TTL = int(os.getenv("MCP_OAUTH_CODE_TTL", "60"))
+MCP_OAUTH_TOKEN_TTL = int(os.getenv("MCP_OAUTH_TOKEN_TTL", "3600"))
+MCP_CIMD_ALLOWED_HOSTS = tuple(
+    host.strip().lower()
+    for host in os.getenv("MCP_CIMD_ALLOWED_HOSTS", "").split(",")
+    if host.strip()
+)
