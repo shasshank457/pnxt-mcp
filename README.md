@@ -122,7 +122,7 @@ python server.py
 For HTTP MCP transport on port 8000:
 
 ```bash
-python -c "import server; server.mcp.run('streamable-http', host='0.0.0.0', port=8000)"
+python -c "import server; server.run_http(host='0.0.0.0', port=8000)"
 ```
 
 ## Docker

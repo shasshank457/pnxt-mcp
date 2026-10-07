@@ -18,6 +18,7 @@ from services.mcp_oauth import (
 from services.mcp_oauth import (
     token as oauth_token,
 )
+from services.mcp_protocol_gate import MCPProtocolGate
 from services.mcp_session_middleware import MCPSessionMiddleware
 from services.metrics import get_metrics
 from tools.auth import auth_callback, auth_check
@@ -500,3 +501,24 @@ def get_mcp_metrics():
 
 if __name__ == "__main__":
     mcp.run()
+
+
+def run_http(*, host: str = "127.0.0.1", port: int = 8000) -> None:
+    """Run the stateful HTTP server with the application protocol gate."""
+    import anyio
+
+    anyio.run(_run_http, host, port)
+
+
+async def _run_http(host: str, port: int) -> None:
+    import uvicorn
+
+    app = MCPProtocolGate(
+        mcp.streamable_http_app(
+            streamable_http_path="/mcp",
+            stateless_http=False,
+            host=host,
+        )
+    )
+    config = uvicorn.Config(app, host=host, port=port)
+    await uvicorn.Server(config).serve()

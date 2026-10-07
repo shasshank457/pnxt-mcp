@@ -12,4 +12,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["python", "-c", "import server; server.mcp.run('streamable-http', host='0.0.0.0', port=8000, stateless_http=False)"]
+CMD ["python", "-c", "import server; server.run_http(host='0.0.0.0', port=8000)"]
