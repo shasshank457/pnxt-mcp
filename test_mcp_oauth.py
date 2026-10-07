@@ -10,6 +10,7 @@ import hashlib
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 from urllib.parse import unquote
 
@@ -79,8 +80,8 @@ class StreamingOversizedResponse(FakeResponse):
 
 
 class FakeClient:
-    responses = []
-    requests = []
+    responses: ClassVar[list[FakeResponse]] = []
+    requests: ClassVar[list[tuple[str, dict]]] = []
 
     def __init__(self, **_kwargs):
         self.kwargs = _kwargs

@@ -17,11 +17,11 @@ from config import (
     POINTNXT_LOGIN_URL,
 )
 from services import session_store
+from services.auth_session import get_session
 from services.oauth_client_metadata import (
     ClientMetadataError,
     resolve_client_metadata,
 )
-from services.auth_session import get_session
 from services.request_context import reset_request_key, set_request_key
 
 MCP_SCOPE = "mcp"

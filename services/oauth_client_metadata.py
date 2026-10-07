@@ -8,6 +8,7 @@ import time
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+
 from config import MCP_CIMD_ALLOWED_HOSTS
 
 
@@ -43,7 +44,7 @@ def validate_metadata_url(value: str) -> str:
     if any(part in {".", ".."} for part in parsed.path.split("/")):
         raise ClientMetadataError("invalid client metadata URL")
     try:
-        parsed.port
+        _port = parsed.port
     except ValueError as exc:
         raise ClientMetadataError("invalid client metadata URL") from exc
     return value
