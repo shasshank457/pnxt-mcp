@@ -6,10 +6,10 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 from services.auth_session import current_user, set_session
+from services.oauth_client_metadata import ClientMetadataError, _public_addresses
 from services.pointnxt_api import _safe_params, _structured_log
 from services.request_context import reset_request_key, set_request_key
 from services.session_store import clear_all_for_tests
-from services.oauth_client_metadata import ClientMetadataError
 from tools.business import get_business_summary
 
 
@@ -52,7 +52,6 @@ async def main() -> None:
         assert "orders down" not in str(summary)
 
     # Restricted metadata destinations are rejected before any HTTP request.
-    from services.oauth_client_metadata import _public_addresses
     for address in ("127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.1.1", "::1", "ff02::1"):
         with patch("services.oauth_client_metadata.socket.getaddrinfo", return_value=[(None, None, None, None, (address, 443))]):
             try:

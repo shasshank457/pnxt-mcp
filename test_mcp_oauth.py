@@ -15,7 +15,6 @@ from urllib.parse import unquote
 
 from services import mcp_oauth, session_store
 from services.auth_session import set_session
-from services.request_context import reset_request_key, set_request_key
 from services.oauth_client_metadata import (
     ClientMetadataError,
     clear_metadata_cache_for_tests,
@@ -23,6 +22,7 @@ from services.oauth_client_metadata import (
     validate_metadata,
     validate_metadata_url,
 )
+from services.request_context import reset_request_key, set_request_key
 
 
 class Request:
