@@ -13,10 +13,8 @@ from config import (
     MCP_OAUTH_REDIRECT_URI,
     MCP_OAUTH_TOKEN_TTL,
     MCP_PUBLIC_BASE_URL,
-    POINTNXT_AUTH_CALLBACK_URL,
-    POINTNXT_LOGIN_URL,
 )
-from services import session_store
+from services import auth_bridge, session_store
 from services.auth_session import get_session
 from services.oauth_client_metadata import (
     ClientMetadataError,
@@ -109,8 +107,8 @@ async def authorize(request):
     # The existing PointNXT callback transaction uses the durable OAuth
     # authorization-session key and performs the existing server-side exchange.
     session_store.put_auth_transaction(state, auth_session_key, {}, time.monotonic() + AUTH_CALLBACK_TIMEOUT)
-    login_url = f"{POINTNXT_LOGIN_URL}?{urlencode({'redirect_uri': POINTNXT_AUTH_CALLBACK_URL, 'state': state})}"
-    return RedirectResponse(login_url, status_code=302)
+    auth_bridge.begin(state, auth_session_key, {}, time.time() + AUTH_CALLBACK_TIMEOUT)
+    return RedirectResponse(auth_bridge.login_url(state), status_code=302)
 
 
 async def callback(request):
@@ -122,10 +120,15 @@ async def callback(request):
     transaction = session_store.consume_oauth_transaction(state)
     if not transaction:
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
-    result = await auth_callback(request)
-    if getattr(result, "status_code", 500) >= 400:
-        return result
     key = transaction["auth_session_key"]
+    if request.query_params.get("bridge") == "1":
+        completion = session_store.consume_auth_bridge_completion(state)
+        if not completion or completion["request_key"] != key:
+            return JSONResponse({"error": "access_denied"}, status_code=403)
+    else:
+        result = await auth_callback(request)
+        if getattr(result, "status_code", 500) >= 400:
+            return result
     token = set_request_key(key)
     try:
         session = get_session()

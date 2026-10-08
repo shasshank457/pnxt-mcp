@@ -26,3 +26,12 @@ MCP_CIMD_ALLOWED_HOSTS = tuple(
     for host in os.getenv("MCP_CIMD_ALLOWED_HOSTS", "").split(",")
     if host.strip()
 )
+MCP_AUTH_RATE_LIMIT_IP = int(os.getenv("MCP_AUTH_RATE_LIMIT_IP", "10"))
+MCP_AUTH_RATE_LIMIT_TRANSACTION = int(
+    os.getenv("MCP_AUTH_RATE_LIMIT_TRANSACTION", "5")
+)
+MCP_AUTH_RATE_LIMIT_WINDOW = int(os.getenv("MCP_AUTH_RATE_LIMIT_WINDOW", "300"))
+MCP_SESSION_ENCRYPTION_KEY = os.getenv("MCP_SESSION_ENCRYPTION_KEY", "")
+MCP_SESSION_ENCRYPTION_REQUIRED = os.getenv(
+    "MCP_SESSION_ENCRYPTION_REQUIRED", "false" if DEV_MODE else "true"
+).lower() == "true"

@@ -1,7 +1,7 @@
 from mcp.server.mcpserver import MCPServer
 
 from prompts import register_prompts
-from services import session_store
+from services import auth_bridge, session_store
 from services.mcp_oauth import (
     authorize as oauth_authorize,
 )
@@ -114,7 +114,16 @@ register_prompts(mcp)
 async def pointnxt_auth_callback(request):
     if session_store.has_oauth_transaction(request.query_params.get("state", "")):
         return await oauth_callback(request)
+    if request.query_params.get("bridge") == "1":
+        return await auth_bridge.callback(request)
     return await auth_callback(request)
+
+
+@mcp.custom_route("/auth/login", methods=["GET", "POST"])
+async def pointnxt_auth_bridge(request):
+    if request.method == "GET":
+        return await auth_bridge.login_page(request)
+    return await auth_bridge.login_submit(request)
 
 
 @mcp.custom_route("/auth/check", methods=["GET"])

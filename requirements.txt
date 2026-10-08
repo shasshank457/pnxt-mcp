@@ -4,3 +4,4 @@ requests
 httpx
 mcp
 python-dotenv
+cryptography

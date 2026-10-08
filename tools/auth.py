@@ -11,11 +11,12 @@ import httpx
 from config import (
     AUTH_CALLBACK_TIMEOUT,
     DEV_MODE,
+    MCP_PUBLIC_BASE_URL,
     POINTNXT_AUTH_CALLBACK_URL,
     POINTNXT_BASE_URL,
     POINTNXT_LOGIN_URL,
 )
-from services import session_store
+from services import auth_bridge, session_store
 from services.auth_session import clear_session, get_session
 from services.auth_session import current_user as session_user
 from services.request_context import get_request_key, reset_request_key, set_request_key
@@ -61,6 +62,11 @@ def _wait_for_callback(state: str) -> dict:
 
 async def authenticate() -> dict:
     """Open PointNXT in the browser and wait for the completed login callback."""
+    if DEV_MODE and get_request_key() != "stdio":
+        return {
+            "authenticated": False,
+            "message": "Development authentication is disabled for public HTTP requests.",
+        }
     existing = get_session()
     if existing and existing.is_authenticated():
         logger.info("PointNXT authentication session loaded")
@@ -70,10 +76,10 @@ async def authenticate() -> dict:
     if DEV_MODE:
         values = await asyncio.to_thread(_wait_for_callback, state)
     else:
-        if not POINTNXT_AUTH_CALLBACK_URL.startswith("https://"):
+        if not MCP_PUBLIC_BASE_URL.startswith("https://"):
             return {
                 "authenticated": False,
-                "message": "PointNXT public authentication callback is not configured.",
+                "message": "MCP public authentication bridge is not configured.",
             }
         values = {}
         session_key = get_request_key()
@@ -85,7 +91,13 @@ async def authenticate() -> dict:
             {},
             time.monotonic() + AUTH_CALLBACK_TIMEOUT,
         )
-        login_url = f"{POINTNXT_LOGIN_URL}?{urlencode({'redirect_uri': POINTNXT_AUTH_CALLBACK_URL, 'state': state})}"
+        auth_bridge.begin(
+            state,
+            session_key,
+            {},
+            time.time() + AUTH_CALLBACK_TIMEOUT,
+        )
+        login_url = auth_bridge.login_url(state)
         logger.info("PointNXT login URL generated")
         return {
             "authenticated": False,
@@ -248,9 +260,7 @@ async def login_with_credentials(
                     "error": "Authentication response was missing session information.",
                 }
             session = create_authenticated_session({"data": data}, "credentials")
-        logger.info(
-            "PointNXT credential authentication succeeded for %s", email.strip()
-        )
+        logger.info("PointNXT credential authentication succeeded")
         result = session.as_dict()
         result["tenant_id_present"] = bool(session.get_tenant_id())
         return result
