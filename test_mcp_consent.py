@@ -167,6 +167,72 @@ async def test_consent_requires_https():
     assert response.status_code == 400
 
 
+async def _callback_with_auto_approval(monkeypatch, client_id, scope="mcp"):
+    transaction = {
+        "state": "auto-state",
+        "client_id": client_id,
+        "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+        "transaction_id": "auto-transaction",
+        "auth_session_key": "auto-session",
+        "code_challenge": "challenge",
+        "scope": scope,
+        "resource": mcp_oauth.MCP_RESOURCE,
+    }
+    session_store.put_oauth_transaction("auto-state", transaction, time.time() + 60)
+    session = SimpleNamespace(
+        user_id="user-a",
+        tenant_id="tenant-a",
+        membership_id="membership-a",
+        is_authenticated=lambda: True,
+    )
+    monkeypatch.setattr(mcp_oauth, "get_session", lambda: session)
+    async def client_display_name(*_args):
+        return "Claude"
+
+    monkeypatch.setattr(mcp_oauth, "_client_display_name", client_display_name)
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "tools.auth.auth_callback",
+        new=AsyncMock(return_value=SimpleNamespace(status_code=200)),
+    ):
+        return await mcp_oauth.callback(
+            Request(query="state=auto-state&code=backend-code")
+        )
+
+
+@pytest.mark.asyncio
+async def test_allowlisted_client_skips_consent(monkeypatch):
+    monkeypatch.setattr(mcp_oauth, "MCP_AUTO_APPROVE_CLIENT_IDS", ("claude",))
+    response = await _callback_with_auto_approval(monkeypatch, "claude")
+    location = response.headers["location"]
+    assert response.status_code == 302
+    assert "/oauth/consent" not in location
+    assert "code=" in location
+
+
+@pytest.mark.asyncio
+async def test_non_allowlisted_client_keeps_consent(monkeypatch):
+    monkeypatch.setattr(mcp_oauth, "MCP_AUTO_APPROVE_CLIENT_IDS", ("claude",))
+    response = await _callback_with_auto_approval(monkeypatch, "other-client")
+    location = response.headers["location"]
+    assert response.status_code == 302
+    assert "/oauth/consent" in location
+    assert "code=" not in location
+
+
+@pytest.mark.asyncio
+async def test_allowlisted_client_with_other_scope_keeps_consent(monkeypatch):
+    monkeypatch.setattr(mcp_oauth, "MCP_AUTO_APPROVE_CLIENT_IDS", ("claude",))
+    response = await _callback_with_auto_approval(
+        monkeypatch, "claude", scope="other"
+    )
+    location = response.headers["location"]
+    assert response.status_code == 302
+    assert "/oauth/consent" in location
+    assert "code=" not in location
+
+
 @pytest.mark.asyncio
 async def test_full_oauth_callback_consent_and_pkce_exchange(monkeypatch):
     verifier = "v" * 64

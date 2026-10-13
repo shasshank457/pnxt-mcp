@@ -5,6 +5,7 @@ services:
     env_file:
       - .env
     environment:
+      MCP_AUTO_APPROVE_CLIENT_IDS: "https://claude.ai/oauth/mcp-oauth-client-metadata"
       MCP_FORWARDED_ALLOW_IPS: "172.19.0.1"
       POINTNXT_SESSION_STORE_PATH: /var/lib/pnxt-mcp/pointnxt-sessions.sqlite3
     volumes:

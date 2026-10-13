@@ -10,6 +10,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from config import (
     AUTH_CALLBACK_TIMEOUT,
+    MCP_AUTO_APPROVE_CLIENT_IDS,
     MCP_OAUTH_CLIENT_ID,
     MCP_OAUTH_CODE_TTL,
     MCP_OAUTH_REDIRECT_URI,
@@ -116,6 +117,17 @@ async def metadata_authorization_server(_request):
     })
 
 
+def _issue_authorization_code(transaction: dict) -> RedirectResponse:
+    code = secrets.token_urlsafe(48)
+    session_store.put_oauth_code(
+        _hash(code), transaction, time.time() + MCP_OAUTH_CODE_TTL
+    )
+    return RedirectResponse(
+        f"{transaction['redirect_uri']}?{urlencode({'code': code, 'state': transaction['state'], 'iss': MCP_PUBLIC_BASE_URL})}",
+        status_code=302,
+    )
+
+
 async def authorize(request):
     query = request.query_params
     client_id = query.get("client_id", "")
@@ -169,13 +181,15 @@ async def callback(request):
         result = await auth_callback(request)
         if getattr(result, "status_code", 500) >= 400:
             return result
+    auto_approve = False
+    consent_transaction = None
     token = set_request_key(key)
     try:
         session = get_session()
         if not session or not session.is_authenticated():
             return JSONResponse({"error": "access_denied"}, status_code=403)
         consent_id = secrets.token_urlsafe(32)
-        session_store.put_oauth_consent_transaction(consent_id, {
+        consent_transaction = {
             **transaction,
             "auth_session_key": key,
             "user_id": session.user_id,
@@ -184,9 +198,35 @@ async def callback(request):
             "client_display_name": await _client_display_name(
                 transaction["client_id"], transaction["redirect_uri"]
             ),
-        }, time.time() + MCP_OAUTH_CODE_TTL)
+        }
+        session_store.put_oauth_consent_transaction(
+            consent_id,
+            consent_transaction,
+            time.time() + MCP_OAUTH_CODE_TTL,
+        )
+        auto_approve = (
+            transaction["client_id"] in MCP_AUTO_APPROVE_CLIENT_IDS
+            and transaction["scope"] == MCP_SCOPE
+        )
     finally:
         reset_request_key(token)
+    if auto_approve:
+        consumed = session_store.consume_oauth_consent_transaction(
+            consent_id,
+            client_id=consent_transaction["client_id"],
+            state=consent_transaction["state"],
+            redirect_uri=consent_transaction["redirect_uri"],
+            resource=consent_transaction["resource"],
+            scope=consent_transaction["scope"],
+            auth_session_key=consent_transaction["auth_session_key"],
+            user_id=consent_transaction["user_id"],
+            tenant_id=consent_transaction["tenant_id"],
+            membership_id=consent_transaction["membership_id"],
+            decision="approved",
+        )
+        if not consumed:
+            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+        return _issue_authorization_code(consumed)
     return RedirectResponse(
         f"{MCP_PUBLIC_BASE_URL}/oauth/consent?{urlencode({'consent_id': consent_id})}",
         status_code=302,
@@ -283,12 +323,7 @@ async def consent_decision(request):
             f"{transaction['redirect_uri']}?{urlencode({'error': 'access_denied', 'state': transaction['state']})}",
             status_code=302,
         )
-    code = secrets.token_urlsafe(48)
-    session_store.put_oauth_code(_hash(code), transaction, time.time() + MCP_OAUTH_CODE_TTL)
-    return RedirectResponse(
-        f"{transaction['redirect_uri']}?{urlencode({'code': code, 'state': transaction['state'], 'iss': MCP_PUBLIC_BASE_URL})}",
-        status_code=302,
-    )
+    return _issue_authorization_code(transaction)
 
 
 async def token(request):
