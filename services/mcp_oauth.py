@@ -44,8 +44,10 @@ _CONSENT_SECURITY_HEADERS = {
 }
 
 
-def _consent_headers(redirect_uri: str) -> dict[str, str]:
-    headers = _CONSENT_SECURITY_HEADERS.copy()
+def _with_form_action_origin(
+    base_headers: dict[str, str], redirect_uri: str
+) -> dict[str, str]:
+    headers = base_headers.copy()
     parsed = urlsplit(redirect_uri)
     if parsed.scheme and parsed.netloc:
         origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -261,7 +263,9 @@ refund, or other write tools.</p>
 </html>"""
     return HTMLResponse(
         body,
-        headers=_consent_headers(transaction["redirect_uri"]),
+        headers=_with_form_action_origin(
+            _CONSENT_SECURITY_HEADERS, transaction["redirect_uri"]
+        ),
     )
 
 

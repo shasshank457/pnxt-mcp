@@ -103,9 +103,9 @@ input:focus {{ border-color: #7410c4; box-shadow: 0 0 0 3px rgba(116, 16, 196, .
 </html>"""
     headers = _SECURITY_HEADERS
     if redirect_uri:
-        from services.mcp_oauth import _consent_headers
+        from services.mcp_oauth import _with_form_action_origin
 
-        headers = _consent_headers(redirect_uri)
+        headers = _with_form_action_origin(_SECURITY_HEADERS, redirect_uri)
     return HTMLResponse(body, headers=headers)
 
 

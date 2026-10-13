@@ -49,13 +49,13 @@ async def main() -> None:
     session_store.clear_all_for_tests()
     old_client = mcp_oauth.MCP_OAUTH_CLIENT_ID
     old_redirect = mcp_oauth.MCP_OAUTH_REDIRECT_URI
-    mcp_oauth.MCP_OAUTH_CLIENT_ID = "bridge-client"
+    mcp_oauth.MCP_OAUTH_CLIENT_ID = "claude"
     mcp_oauth.MCP_OAUTH_REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
     verifier, challenge = verifier_pair()
 
     query = urlencode(
         {
-            "client_id": "bridge-client",
+            "client_id": "claude",
             "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
             "state": "bridge-state",
             "code_challenge": challenge,
