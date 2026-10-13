@@ -159,7 +159,12 @@ async def authorize(request):
     # The existing PointNXT callback transaction uses the durable OAuth
     # authorization-session key and performs the existing server-side exchange.
     session_store.put_auth_transaction(state, auth_session_key, {}, time.monotonic() + AUTH_CALLBACK_TIMEOUT)
-    auth_bridge.begin(state, auth_session_key, {}, time.time() + AUTH_CALLBACK_TIMEOUT)
+    auth_bridge.begin(
+        state,
+        auth_session_key,
+        {"redirect_uri": redirect_uri},
+        time.time() + AUTH_CALLBACK_TIMEOUT,
+    )
     return RedirectResponse(auth_bridge.login_url(state), status_code=302)
 
 

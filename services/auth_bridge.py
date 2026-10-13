@@ -39,7 +39,12 @@ def login_url(state: str) -> str:
     return f"{MCP_PUBLIC_BASE_URL.rstrip('/')}/auth/login?{urlencode({'state': state})}"
 
 
-def _page(state: str, nonce: str, error: str | None = None) -> HTMLResponse:
+def _page(
+    state: str,
+    nonce: str,
+    error: str | None = None,
+    redirect_uri: str | None = None,
+) -> HTMLResponse:
     escaped_state = html.escape(state, quote=True)
     escaped_nonce = html.escape(nonce, quote=True)
     error_html = f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
@@ -96,10 +101,12 @@ input:focus {{ border-color: #7410c4; box-shadow: 0 0 0 3px rgba(116, 16, 196, .
 </main><script>document.querySelector('[data-password-toggle]').addEventListener('click',function(){{const p=document.getElementById('password');const shown=p.type==='text';p.type=shown?'password':'text';this.textContent=shown?'⌧':'◉';this.setAttribute('aria-label',shown?'Show password':'Hide password');}});</script>
 </body>
 </html>"""
-    return HTMLResponse(
-        body,
-        headers=_SECURITY_HEADERS,
-    )
+    headers = _SECURITY_HEADERS
+    if redirect_uri:
+        from services.mcp_oauth import _consent_headers
+
+        headers = _consent_headers(redirect_uri)
+    return HTMLResponse(body, headers=headers)
 
 
 def _error(message: str, status_code: int = 400) -> HTMLResponse:
@@ -138,7 +145,7 @@ async def login_page(request):
     nonce = secrets.token_urlsafe(32)
     if not session_store.set_auth_bridge_nonce(state, nonce):
         return _error("Authentication request is invalid or expired.")
-    return _page(state, nonce)
+    return _page(state, nonce, redirect_uri=transaction.get("redirect_uri"))
 
 
 async def login_submit(request):
@@ -196,7 +203,12 @@ async def login_submit(request):
         session_store.release_auth_bridge_transaction(state)
         next_nonce = secrets.token_urlsafe(32)
         session_store.set_auth_bridge_nonce(state, next_nonce)
-        return _page(state, next_nonce, "PointNXT sign-in failed.")
+        return _page(
+            state,
+            next_nonce,
+            "PointNXT sign-in failed.",
+            claimed.get("redirect_uri"),
+        )
 
     if not session_store.complete_auth_bridge_transaction(state):
         session_store.clear(claimed["request_key"])
