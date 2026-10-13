@@ -17,7 +17,7 @@ from config import (
     POINTNXT_LOGIN_URL,
 )
 from services import auth_bridge, session_store
-from services.auth_session import clear_session, get_session
+from services.auth_session import get_session, invalidate_session
 from services.auth_session import current_user as session_user
 from services.request_context import get_request_key, reset_request_key, set_request_key
 from services.session_manager import create_authenticated_session
@@ -225,7 +225,7 @@ async def logout() -> dict:
                     json={"refreshToken": session.get_refresh_token()},
                 )
     finally:
-        clear_session()
+        invalidate_session()
     logger.info("PointNXT logout completed")
     return {"authenticated": False, "message": "You have been signed out of PointNXT."}
 

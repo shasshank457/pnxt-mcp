@@ -75,25 +75,61 @@ def clear_session() -> None:
     session_store.clear(get_request_key())
 
 
+def invalidate_session() -> None:
+    """Revoke MCP grants before clearing an invalidated auth session.
+
+    Grant revocation is deliberately idempotent.  The durable session is
+    cleared in a finally block so an unexpected storage failure cannot leave
+    the backend authentication session usable.
+    """
+    request_key = get_request_key()
+    try:
+        session_store.revoke_mcp_grants(request_key)
+    finally:
+        session_store.clear(request_key)
+
+
+def _parse_expiry(data: dict[str, Any]) -> datetime | None:
+    """Parse confirmed expiry fields without guessing ambiguous semantics."""
+    if "expiresIn" in data and data["expiresIn"] is not None:
+        value = data["expiresIn"]
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            return datetime.fromtimestamp(
+                datetime.now(timezone.utc).timestamp() + value, timezone.utc
+            )
+        return None
+    value = data.get("expiresAt", data.get("expires_at"))
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime.fromtimestamp(value, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else None
+    return None
+
+
 def set_session(payload: dict[str, Any]) -> AuthSession:
     data = payload.get("data", payload)
-    expiry = data.get("expiresAt") or data.get("expires_at") or data.get("expiresIn")
-    if isinstance(expiry, (int, float)):
-        parsed = datetime.fromtimestamp(
-            datetime.now(timezone.utc).timestamp() + expiry, timezone.utc
-        )
-    else:
-        parsed = (
-            datetime.fromisoformat(expiry.replace("Z", "+00:00")) if expiry else None
-        )
+    user = data.get("user") or {}
+    parsed = _parse_expiry(data)
     session = AuthSession(
         data.get("accessToken") or data.get("access_token") or "",
         data.get("refreshToken") or data.get("refresh_token") or "",
         data.get("tenantId") or data.get("tenant_id") or "",
         data.get("membershipId") or data.get("membership_id"),
         data.get("userId") or data.get("user_id"),
-        data.get("email"),
+        data.get("email") or user.get("email"),
         parsed,
+        data.get("loginMethod") or data.get("login_method"),
+        data.get("name") or user.get("name"),
+        data.get("role") or user.get("role"),
     )
     return session_store.set_(get_request_key(), session)
 
@@ -108,6 +144,9 @@ def current_user() -> dict[str, Any]:
             "user_id": None,
             "tenant_id": None,
             "membership_id": None,
+            "name": None,
+            "role": None,
+            "login_method": None,
             "session_expiry": None,
             "expires_in_seconds": None,
         }

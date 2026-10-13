@@ -5,3 +5,5 @@ httpx
 mcp
 python-dotenv
 cryptography
+pytest
+pytest-asyncio

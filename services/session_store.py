@@ -75,8 +75,10 @@ def _connect() -> sqlite3.Connection:
     connection.execute("CREATE TABLE IF NOT EXISTS auth_bridge_transactions (state TEXT PRIMARY KEY, request_key TEXT NOT NULL, payload TEXT NOT NULL, expires_at REAL NOT NULL, nonce_hash TEXT, status TEXT NOT NULL DEFAULT 'pending')")
     connection.execute("CREATE TABLE IF NOT EXISTS refresh_leases (session_key TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at REAL NOT NULL)")
     connection.execute("CREATE TABLE IF NOT EXISTS oauth_transactions (state TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL)")
+    connection.execute("CREATE TABLE IF NOT EXISTS oauth_consent_transactions (consent_id TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL, status TEXT NOT NULL DEFAULT 'pending')")
     connection.execute("CREATE TABLE IF NOT EXISTS oauth_codes (code_hash TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL)")
     connection.execute("CREATE TABLE IF NOT EXISTS mcp_tokens (token_hash TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, bound_session_key TEXT)")
+    connection.execute("CREATE TABLE IF NOT EXISTS mcp_refresh_tokens (token_hash TEXT PRIMARY KEY, payload TEXT NOT NULL, expires_at REAL NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)")
     connection.execute("CREATE TABLE IF NOT EXISTS auth_rate_limits (scope TEXT PRIMARY KEY, window_start REAL NOT NULL, attempts INTEGER NOT NULL)")
     try:
         connection.execute("ALTER TABLE mcp_tokens ADD COLUMN bound_session_key TEXT")
@@ -373,6 +375,84 @@ def has_oauth_transaction(state: str) -> bool:
     return bool(row and row[0] > time.time())
 
 
+def put_oauth_consent_transaction(
+    consent_id: str, payload: dict, expires_at: float
+) -> None:
+    with _connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO oauth_consent_transactions "
+            "(consent_id, payload, expires_at, status) VALUES (?, ?, ?, 'pending')",
+            (consent_id, json.dumps(payload), expires_at),
+        )
+        connection.commit()
+
+
+def get_oauth_consent_transaction(consent_id: str) -> dict | None:
+    if not consent_id:
+        return None
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT payload, expires_at, status FROM oauth_consent_transactions "
+            "WHERE consent_id = ?",
+            (consent_id,),
+        ).fetchone()
+    if not row or row[1] <= time.time() or row[2] != "pending":
+        return None
+    return json.loads(row[0])
+
+
+def consume_oauth_consent_transaction(
+    consent_id: str,
+    *,
+    client_id: str,
+    state: str,
+    redirect_uri: str,
+    resource: str,
+    scope: str,
+    auth_session_key: str,
+    user_id: str | None,
+    tenant_id: str,
+    membership_id: str | None,
+    decision: str,
+) -> dict | None:
+    """Atomically consume a consent decision after checking all bindings."""
+    if decision not in {"approved", "denied"}:
+        return None
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT payload, expires_at, status FROM oauth_consent_transactions "
+            "WHERE consent_id = ?",
+            (consent_id,),
+        ).fetchone()
+        if not row or row[1] <= time.time() or row[2] != "pending":
+            connection.rollback()
+            return None
+        payload = json.loads(row[0])
+        if not all(
+            (
+                payload.get("client_id") == client_id,
+                payload.get("state") == state,
+                payload.get("redirect_uri") == redirect_uri,
+                payload.get("resource") == resource,
+                payload.get("scope") == scope,
+                payload.get("auth_session_key") == auth_session_key,
+                payload.get("user_id") == user_id,
+                payload.get("tenant_id") == tenant_id,
+                payload.get("membership_id") == membership_id,
+            )
+        ):
+            connection.rollback()
+            return None
+        connection.execute(
+            "UPDATE oauth_consent_transactions SET status = ? "
+            "WHERE consent_id = ? AND status = 'pending'",
+            (decision, consent_id),
+        )
+        connection.commit()
+    return payload
+
+
 def put_oauth_code(code_hash: str, payload: dict, expires_at: float) -> None:
     with _connect() as connection:
         connection.execute("INSERT INTO oauth_codes(code_hash, payload, expires_at) VALUES (?, ?, ?)", (code_hash, json.dumps(payload), expires_at))
@@ -435,6 +515,93 @@ def revoke_mcp_token(token_hash: str) -> None:
         connection.commit()
 
 
+def put_mcp_refresh_token(token_hash: str, payload: dict, expires_at: float) -> None:
+    with _connect() as connection:
+        connection.execute(
+            "INSERT INTO mcp_refresh_tokens(token_hash, payload, expires_at, revoked) "
+            "VALUES (?, ?, ?, 0)",
+            (token_hash, json.dumps(payload), expires_at),
+        )
+        connection.commit()
+
+
+def get_mcp_refresh_token(token_hash: str) -> dict | None:
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT payload, expires_at, revoked FROM mcp_refresh_tokens "
+            "WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+    if not row or row[1] <= time.time() or row[2]:
+        return None
+    return json.loads(row[0])
+
+
+def consume_mcp_refresh_token(
+    token_hash: str,
+    *,
+    client_id: str,
+    resource: str,
+    user_id: str | None,
+    tenant_id: str,
+    membership_id: str | None,
+) -> dict | None:
+    """Atomically consume one valid refresh token for rotation."""
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT payload, expires_at, revoked FROM mcp_refresh_tokens "
+            "WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+        if not row or row[1] <= time.time() or row[2]:
+            connection.rollback()
+            return None
+        payload = json.loads(row[0])
+        if not all(
+            (
+                payload.get("client_id") == client_id,
+                payload.get("resource") == resource,
+                payload.get("user_id") == user_id,
+                payload.get("tenant_id") == tenant_id,
+                payload.get("membership_id") == membership_id,
+            )
+        ):
+            connection.rollback()
+            return None
+        connection.execute(
+            "DELETE FROM mcp_refresh_tokens WHERE token_hash = ?",
+            (token_hash,),
+        )
+        connection.commit()
+    return payload
+
+
+def revoke_mcp_refresh_token(token_hash: str) -> None:
+    with _connect() as connection:
+        connection.execute(
+            "UPDATE mcp_refresh_tokens SET revoked = 1 WHERE token_hash = ?",
+            (token_hash,),
+        )
+        connection.commit()
+
+
+def revoke_mcp_grants(auth_session_key: str) -> None:
+    """Revoke all MCP access and refresh grants for an OAuth session."""
+    with _connect() as connection:
+        connection.execute(
+            "UPDATE mcp_tokens SET revoked = 1 "
+            "WHERE json_extract(payload, '$.auth_session_key') = ?",
+            (auth_session_key,),
+        )
+        connection.execute(
+            "UPDATE mcp_refresh_tokens SET revoked = 1 "
+            "WHERE json_extract(payload, '$.auth_session_key') = ?",
+            (auth_session_key,),
+        )
+        connection.commit()
+
+
 def clear_all_for_tests() -> None:
     with _connect() as connection:
         connection.execute("DELETE FROM sessions")
@@ -442,8 +609,10 @@ def clear_all_for_tests() -> None:
         connection.execute("DELETE FROM auth_bridge_transactions")
         connection.execute("DELETE FROM refresh_leases")
         connection.execute("DELETE FROM oauth_transactions")
+        connection.execute("DELETE FROM oauth_consent_transactions")
         connection.execute("DELETE FROM oauth_codes")
         connection.execute("DELETE FROM mcp_tokens")
+        connection.execute("DELETE FROM mcp_refresh_tokens")
         connection.execute("DELETE FROM auth_rate_limits")
         connection.commit()
     with _lock:

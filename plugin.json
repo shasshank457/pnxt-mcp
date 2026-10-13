@@ -1,0 +1,42 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "pointnxt-mcp",
+  "version": "0.1.0",
+  "description": "PointNXT MCP provides authenticated, tenant-scoped access to PointNXT commerce data through an AI assistant. It retrieves and searches orders, products, inventory summaries, customer context derived from order data, stored shipment and return information, business summaries, and diagnostics. Commerce operations are read-only; authentication operations can change session state. Live carrier tracking refresh and commerce mutations are not implemented.",
+  "author": {
+    "name": "PointNXT",
+    "url": "https://pointnxt.com"
+  },
+  "homepage": "https://pointnxt.com",
+  "keywords": [
+    "commerce",
+    "orders",
+    "inventory",
+    "operations"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "PointNXT MCP",
+        "shortDescription": "PointNXT commerce data",
+        "longDescription": "PointNXT MCP provides authenticated, tenant-scoped access to PointNXT commerce data through an AI assistant. It can retrieve and search orders, order details, order statistics, valid status transitions, products, product details, product and inventory summaries, stored shipment information, return-related order information, customer context derived from supported order data, and evidence-backed business summaries and attention queues. It also exposes backend health, authentication, configuration, and in-process metrics diagnostics. Commerce operations are read-only: the server does not execute order changes, refunds, or other commerce writes. Authentication operations establish, refresh, or clear the connected PointNXT session and may contact the PointNXT service. Results and access are limited by the authenticated PointNXT account, tenant context, and backend authorization.",
+        "developerName": "PointNXT",
+        "category": "Business & Operations",
+        "websiteURL": "https://pointnxt.com",
+        "capabilities": [
+          "Search and summarize PointNXT orders",
+          "Retrieve PointNXT products and backend inventory summaries",
+          "Review stored shipment, return, and business indicators"
+        ],
+        "defaultPrompt": [
+          "Show today's orders and totals",
+          "Find pending orders this week",
+          "Summarize the product catalog"
+        ]
+      },
+      "publication": {
+        "release_notes": "Initial public submission draft for PointNXT MCP. Provides authenticated, tenant-scoped read access to PointNXT orders, products, inventory summaries, customer context, shipments, returns, business summaries, and diagnostics through a remote MCP endpoint. Commerce write operations are not included."
+      }
+    }
+  }
+}

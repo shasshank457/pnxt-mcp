@@ -22,7 +22,8 @@ _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Pragma": "no-cache",
     "Content-Security-Policy": (
-        "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     ),
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
@@ -41,20 +42,58 @@ def login_url(state: str) -> str:
 def _page(state: str, nonce: str, error: str | None = None) -> HTMLResponse:
     escaped_state = html.escape(state, quote=True)
     escaped_nonce = html.escape(nonce, quote=True)
-    error_html = f'<p role="alert">{html.escape(error)}</p>' if error else ""
+    error_html = f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
     body = f"""<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Sign in to PointNXT</title></head>
-<body>
-<h1>Sign in to PointNXT</h1>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in to PointNXT</title>
+<style>
+:root {{ color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #15213d; background: #f7f8fa; }}
+* {{ box-sizing: border-box; }}
+body {{ min-height: 100vh; margin: 0; display: flex; justify-content: center; background: #f7f8fa; }}
+.shell {{ width: min(100%, 620px); padding: 84px 24px 52px; text-align: center; }}
+.brand {{ margin: 0 auto 39px; font-size: 25px; font-weight: 500; letter-spacing: -1.8px; line-height: 1; }}
+.brand-point {{ color: #663b9d; }} .brand-nxt {{ color: #f5a623; }}
+.card {{ width: min(100%, 504px); margin: 0 auto; padding: 42px 41px 38px; text-align: left; background: #fff; border: 1px solid #dfe2e8; border-radius: 18px; box-shadow: 0 12px 22px rgba(22, 31, 52, .12); }}
+h1 {{ margin: 0; color: #15213d; font-size: 29px; line-height: 1.2; letter-spacing: -.8px; }}
+.subcopy, .support, .footer {{ color: #737d91; font-size: 15px; }}
+.subcopy {{ margin: 13px 0 30px; }}
+.link {{ color: #7410c4; text-decoration: none; }}
+.field {{ display: block; margin: 0 0 13px; color: #15213d; font-size: 15px; font-weight: 600; }}
+.field-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; }}
+.field-row .field {{ margin: 0; }}
+.muted-link {{ color: #737d91; font-weight: 400; text-decoration: none; }}
+input[type=email], input[type=password] {{ display: block; width: 100%; height: 41px; margin-top: 7px; padding: 0 13px; border: 1px solid #d9dde5; border-radius: 9px; color: #15213d; background: #fff; font: inherit; outline: none; }}
+input:focus {{ border-color: #7410c4; box-shadow: 0 0 0 3px rgba(116, 16, 196, .12); }}
+.password-wrap {{ position: relative; }} .password-wrap input {{ padding-right: 44px; }}
+.toggle-password {{ position: absolute; top: 50%; right: 10px; width: 28px; height: 28px; transform: translateY(-50%); border: 0; color: #737d91; background: transparent; cursor: pointer; font-size: 17px; }}
+.remember {{ display: flex; align-items: center; gap: 8px; margin: 9px 0 27px; color: #737d91; font-size: 15px; }}
+.remember input {{ width: 18px; height: 18px; margin: 0; accent-color: #7410c4; }}
+.submit {{ display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; height: 42px; border: 0; border-radius: 9px; color: white; background: #790bc5; font: inherit; font-weight: 600; font-size: 16px; cursor: pointer; }}
+.submit:hover {{ background: #6808ac; }} .submit svg {{ width: 18px; height: 18px; }}
+.support {{ margin: 27px 0 0; text-align: center; }} .support a {{ color: #15213d; text-decoration: underline; text-underline-offset: 3px; }}
+.footer {{ margin-top: 32px; text-align: center; font-size: 13px; }} .security {{ margin-bottom: 12px; }} .security::before {{ content: "♢"; color: #16a05d; margin-right: 8px; font-size: 17px; }}
+.footer-links {{ color: #a0a7b5; }} .footer-links span {{ margin: 0 3px; }} .footer-links a {{ color: #8b93a3; text-underline-offset: 3px; }}
+.error {{ margin: -10px 0 18px; padding: 10px 12px; border-radius: 8px; color: #9b1c1c; background: #fff1f1; font-size: 14px; }}
+@media (max-width: 560px) {{ .shell {{ padding: 42px 16px 32px; }} .brand {{ margin-bottom: 28px; }} .card {{ padding: 30px 22px 28px; border-radius: 14px; }} h1 {{ font-size: 26px; }} }}
+</style></head>
+<body><main class="shell">
+<div class="brand" aria-label="PointNXT"><span class="brand-point">POINT</span><span class="brand-nxt">NXT</span></div>
+<section class="card" aria-labelledby="login-title">
+<h1 id="login-title">Welcome back</h1>
+<p class="subcopy">Don't have an account? <span class="link">Sign up</span></p>
 {error_html}
 <form method="post" action="/auth/login">
 <input type="hidden" name="state" value="{escaped_state}">
 <input type="hidden" name="nonce" value="{escaped_nonce}">
-<label>Email <input type="email" name="email" autocomplete="username" required></label>
-<label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-<button type="submit">Sign in</button>
+<label class="field">Email<input type="email" name="email" autocomplete="username" placeholder="name@example.com" required></label>
+<div class="field-row"><label class="field" for="password">Password</label><span class="muted-link">Forgot password?</span></div>
+<div class="password-wrap"><input id="password" type="password" name="password" autocomplete="current-password" required><button class="toggle-password" type="button" aria-label="Show password" data-password-toggle>⌧</button></div>
+<button class="submit" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M13 5l7 7-7 7M20 12H4"/></svg>Sign in</button>
 </form>
+<p class="support">Trouble signing in? <span>Contact Support</span></p>
+</section>
+<footer class="footer"><div class="security">Protected by enterprise-grade security</div><div class="footer-links">© 2026 PointNXT <span>·</span> Terms <span>·</span> Privacy Policy <span>·</span> Data Deletion</div></footer>
+</main><script>document.querySelector('[data-password-toggle]').addEventListener('click',function(){{const p=document.getElementById('password');const shown=p.type==='text';p.type=shown?'password':'text';this.textContent=shown?'⌧':'◉';this.setAttribute('aria-label',shown?'Show password':'Hide password');}});</script>
 </body>
 </html>"""
     return HTMLResponse(

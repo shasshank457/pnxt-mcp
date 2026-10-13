@@ -1,10 +1,14 @@
 from mcp.server.mcpserver import MCPServer
+from mcp_types import ToolAnnotations
 
 from prompts import register_prompts
+from config import MCP_FORWARDED_ALLOW_IPS
 from services import auth_bridge, session_store
 from services.mcp_oauth import (
     authorize as oauth_authorize,
 )
+from services.mcp_oauth import consent as oauth_consent
+from services.mcp_oauth import consent_decision as oauth_consent_decision
 from services.mcp_oauth import (
     callback as oauth_callback,
 )
@@ -22,9 +26,7 @@ from services.mcp_protocol_gate import MCPProtocolGate
 from services.mcp_session_middleware import MCPSessionMiddleware
 from services.metrics import get_metrics
 from tools.auth import auth_callback, auth_check
-from tools.auth import authenticate as exchange_session
 from tools.auth import current_user as get_current_user
-from tools.auth import login_with_credentials as login_credentials
 from tools.auth import logout as clear_user_session
 from tools.business import (
     get_attention_queue as fetch_attention_queue,
@@ -105,6 +107,18 @@ from tools.system import (
     check_configuration as run_configuration_check,
 )
 
+# Tool annotations are explicit because OpenAI's public MCP review requires all
+# three behavior hints on every exposed tool.
+READ_ONLY_EXTERNAL = ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, openWorldHint=True
+)
+READ_ONLY_LOCAL = ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, openWorldHint=False
+)
+AUTH_STATE_CHANGE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, openWorldHint=True
+)
+
 # Global MCP server object
 mcp = MCPServer("PointNXT MCP", middleware=[MCPSessionMiddleware()])
 register_prompts(mcp)
@@ -151,6 +165,13 @@ async def oauth_callback_route(request):
     return await oauth_callback(request)
 
 
+@mcp.custom_route("/oauth/consent", methods=["GET", "POST"])
+async def oauth_consent_route(request):
+    if request.method == "GET":
+        return await oauth_consent(request)
+    return await oauth_consent_decision(request)
+
+
 @mcp.custom_route("/oauth/token", methods=["POST"])
 async def oauth_token_route(request):
     return await oauth_token(request)
@@ -161,13 +182,13 @@ async def oauth_revoke_route(request):
     return await oauth_revoke(request)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_LOCAL)
 def current_user():
     """Return the currently authenticated PointNXT user."""
     return get_current_user()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_LOCAL)
 async def auth_status():
     """Return lightweight authentication status without exposing tokens."""
     user = get_current_user()
@@ -180,27 +201,17 @@ async def auth_status():
     }
 
 
-@mcp.tool(name="authenticate_with_pointnxt", title="Authenticate with PointNXT")
-async def authenticate():
-    """Open PointNXT in the browser and sign in without entering credentials here."""
-    return await exchange_session()
-
-
-@mcp.tool(name="login_with_credentials", title="Login to PointNXT")
-async def login_with_credentials(
-    email: str, password: str, remember_device: bool = True
-):
-    """Authenticate directly with PointNXT email and password."""
-    return await login_credentials(email, password, remember_device)
-
-
-@mcp.tool(name="logout_pointnxt", title="Logout from PointNXT")
+@mcp.tool(
+    name="logout_pointnxt",
+    title="Logout from PointNXT",
+    annotations=AUTH_STATE_CHANGE,
+)
 async def logout_pointnxt():
     """Log out of the active PointNXT session."""
     return await clear_user_session()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_orders(
     limit: int = 10,
     page: int = 1,
@@ -240,13 +251,13 @@ async def get_orders(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_order_by_id(order_id: str):
     """Retrieve complete details for one PointNXT order by its ID."""
     return await fetch_order_by_id(order_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def search_orders(
     limit: int = 20,
     page: int = 1,
@@ -268,13 +279,13 @@ async def search_orders(
     return await find_orders(**locals())
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_order(order_reference: str):
     """Retrieve compact detailed information by display/reference number."""
     return await fetch_order(order_reference)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_orders_summary(
     order_status: str | None = None,
     start_date: str | None = None,
@@ -292,7 +303,7 @@ async def get_orders_summary(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def find_customer(
     name: str | None = None,
     email: str | None = None,
@@ -305,7 +316,7 @@ async def find_customer(
     return await find_customers(name, email, phone, customer_id, limit, page)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_customer_context(
     customer_id: str | None = None,
     name: str | None = None,
@@ -318,19 +329,19 @@ async def get_customer_context(
     return await fetch_customer_context(customer_id, name, email, phone, limit, page)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_order_stats():
     """Retrieve dashboard statistics grouped by PointNXT order status."""
     return await fetch_order_stats()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_status_transitions():
     """Retrieve valid workflow transitions for PointNXT order statuses."""
     return await fetch_status_transitions()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_products(
     limit: int = 10,
     page: int = 1,
@@ -366,13 +377,13 @@ async def get_products(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_product_by_id(product_id: str):
     """Retrieve complete catalog information for one product by ID."""
     return await fetch_product_by_id(product_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def search_products(
     limit: int = 20,
     page: int = 1,
@@ -392,13 +403,13 @@ async def search_products(
     return await find_products(**locals())
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_product(product_id: str):
     """Retrieve compact details for one product."""
     return await fetch_product(product_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def search_inventory(
     limit: int = 20,
     page: int = 1,
@@ -412,13 +423,13 @@ async def search_inventory(
     return await find_inventory(**locals())
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_inventory_summary():
     """Retrieve backend-provided inventory summary metrics."""
     return await fetch_inventory_summary()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def search_shipments(
     limit: int = 20,
     page: int = 1,
@@ -431,13 +442,13 @@ async def search_shipments(
     return await find_shipments(**locals())
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_order_shipments(order_reference: str):
     """Find stored shipment and tracking information for an order."""
     return await fetch_order_shipments(order_reference)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_fulfillment_queue(
     limit: int = 20,
     page: int = 1,
@@ -447,7 +458,7 @@ async def get_fulfillment_queue(
     return await fetch_fulfillment_queue(limit, page, warehouse_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def search_returns(
     limit: int = 20,
     page: int = 1,
@@ -460,49 +471,49 @@ async def search_returns(
     return await find_returns(**locals())
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_order_returns(order_reference: str):
     """Show return records for an order without implying refund execution."""
     return await fetch_order_returns(order_reference)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_business_summary(date: str | None = None):
     """Summarize backend-supported business indicators for a UTC date."""
     return await fetch_business_summary(date)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_attention_queue(date: str | None = None):
     """Return evidence-backed business attention categories for a UTC date."""
     return await fetch_attention_queue(date)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_product_summary():
     """Retrieve catalog and inventory dashboard metrics for products."""
     return await fetch_product_summary()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 def check_backend_health():
     """Check PointNXT backend reachability and API latency."""
     return run_backend_health_check()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_LOCAL)
 def check_authentication():
     """Check whether PointNXT authentication is valid."""
     return run_authentication_check()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_LOCAL)
 def check_configuration():
     """Check whether required PointNXT configuration is present."""
     return run_configuration_check()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_LOCAL)
 def get_mcp_metrics():
     """Return in-process MCP request and backend performance metrics."""
     return get_metrics()
@@ -529,5 +540,11 @@ async def _run_http(host: str, port: int) -> None:
             host=host,
         )
     )
-    config = uvicorn.Config(app, host=host, port=port)
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips=MCP_FORWARDED_ALLOW_IPS,
+    )
     await uvicorn.Server(config).serve()

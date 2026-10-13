@@ -1,11 +1,62 @@
+# Local secrets and machine-specific configuration
 .env
-.venv
-__pycache__
-*.pyc
-.git
+.env.local
+.env.production
+.env.staging
+.env.*.local
+*.local
+*.secret
+*.secrets
+credentials
+credentials.*
+secrets/
+*.pem
+*.key
+*.p12
+
+# Local databases and SQLite sidecar files
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-*
+*.sqlite3-*
+*.db-*
+
+# Runtime output and temporary files
+output/
+tmp/
+*.log
+
+# Python environments, caches, and test artifacts
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Repository and local agent metadata
+.git/
 .gitignore
-.agents
-.codex
-tests
+.agents/
+.codex/
+
+# Tests and development-only documentation
+tests/
 test_*.py
 README.md

@@ -35,3 +35,7 @@ MCP_SESSION_ENCRYPTION_KEY = os.getenv("MCP_SESSION_ENCRYPTION_KEY", "")
 MCP_SESSION_ENCRYPTION_REQUIRED = os.getenv(
     "MCP_SESSION_ENCRYPTION_REQUIRED", "false" if DEV_MODE else "true"
 ).lower() == "true"
+# Comma-separated proxy IPs, networks, or trusted UNIX socket paths.  An empty
+# value deliberately trusts no forwarded headers; deployments behind TLS
+# proxies must configure this explicitly.
+MCP_FORWARDED_ALLOW_IPS = os.getenv("MCP_FORWARDED_ALLOW_IPS", "")

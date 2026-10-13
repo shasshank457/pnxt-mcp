@@ -30,6 +30,7 @@ class Request:
     def __init__(self, query="", body=""):
         self.query_params = dict(item.split("=", 1) for item in query.split("&") if item)
         self._body = body.encode()
+        self.url = SimpleNamespace(scheme="https")
 
     async def body(self):
         return self._body
@@ -289,7 +290,14 @@ async def main() -> None:
     with patch("tools.auth.auth_callback", new=AsyncMock(return_value=SimpleNamespace(status_code=200))):
         callback_response = await mcp_oauth.callback(Request("state=state-2&code=pointnxt-code"))
     assert callback_response.status_code == 302
-    location = response_location(callback_response)
+    consent_location = response_location(callback_response)
+    assert "/oauth/consent" in consent_location
+    consent_id = parse_qs(urlsplit(consent_location).query)["consent_id"][0]
+    consent_response = await mcp_oauth.consent_decision(
+        Request(body=f"consent_id={consent_id}&decision=approved")
+    )
+    assert consent_response.status_code == 302
+    location = response_location(consent_response)
     assert "iss=" in location and mcp_oauth.MCP_PUBLIC_BASE_URL in unquote(location)
     code = location.split("code=", 1)[1].split("&", 1)[0]
     assert len(code) > 40
@@ -329,7 +337,7 @@ async def main() -> None:
     protected = await mcp_oauth.metadata_protected_resource(None)
     authorization = await mcp_oauth.metadata_authorization_server(None)
     assert protected.status_code == authorization.status_code == 200
-    assert b"refresh_token" not in authorization.body
+    assert b"refresh_token" in authorization.body
     assert b"S256" in authorization.body
     assert b'"client_id_metadata_document_supported":true' in authorization.body
     assert b"registration_endpoint" not in authorization.body

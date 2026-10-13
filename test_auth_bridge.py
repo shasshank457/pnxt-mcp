@@ -9,6 +9,9 @@ import time
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+import pytest
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
 from services import auth_bridge, mcp_oauth, session_store
 from services.auth_session import set_session
 from services.request_context import get_request_key, reset_request_key, set_request_key
@@ -135,7 +138,14 @@ async def main() -> None:
             )
         )
         assert callback.status_code == 302
-        code = parse_qs(urlsplit(callback.headers["location"]).query)["code"][0]
+        consent_location = callback.headers["location"]
+        assert "/oauth/consent" in consent_location
+        consent_id = parse_qs(urlsplit(consent_location).query)["consent_id"][0]
+        consent = await mcp_oauth.consent_decision(
+            Request(body=f"consent_id={consent_id}&decision=approved")
+        )
+        assert consent.status_code == 302
+        code = parse_qs(urlsplit(consent.headers["location"]).query)["code"][0]
         token = await mcp_oauth.token(
             Request(
                 method="POST",
@@ -223,6 +233,59 @@ async def main() -> None:
         reset_request_key(set_request_key(None))
 
     print("Authentication bridge tests passed")
+
+
+def test_https_enforcement_uses_normalized_request_scheme():
+    """The bridge trusts only the server-normalized scheme."""
+    assert auth_bridge._is_https(Request(scheme="https")) is True
+    assert auth_bridge._is_https(Request(scheme="http")) is False
+
+
+def test_forwarded_headers_are_not_read_by_the_application_check():
+    """An untrusted header cannot override an HTTP request at this layer."""
+    request = Request(scheme="http")
+    request.headers["x-forwarded-proto"] = "https"
+    assert auth_bridge._is_https(request) is False
+
+
+@pytest.mark.asyncio
+async def test_uvicorn_proxy_headers_require_a_trusted_proxy():
+    observed = []
+
+    async def app(scope, receive, send):
+        observed.append(scope["scheme"])
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    trusted = ProxyHeadersMiddleware(app, trusted_hosts="10.0.0.5")
+    await trusted(
+        {
+            "type": "http",
+            "scheme": "http",
+            "client": ("10.0.0.5", 1234),
+            "headers": [(b"x-forwarded-proto", b"https")],
+        },
+        receive,
+        send,
+    )
+    assert observed[-1] == "https"
+
+    untrusted = ProxyHeadersMiddleware(app, trusted_hosts="10.0.0.5")
+    await untrusted(
+        {
+            "type": "http",
+            "scheme": "http",
+            "client": ("198.51.100.10", 1234),
+            "headers": [(b"x-forwarded-proto", b"https")],
+        },
+        receive,
+        send,
+    )
+    assert observed[-1] == "http"
 
 
 if __name__ == "__main__":
