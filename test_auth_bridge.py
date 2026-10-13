@@ -77,6 +77,8 @@ async def main() -> None:
         assert login_response.status_code == 200
         csp = login_response.headers["content-security-policy"]
         assert "form-action 'self' https://claude.ai" in csp
+        assert "default-src 'none'" in csp
+        assert "style-src 'unsafe-inline'" in csp
         assert "script-src 'unsafe-inline'" in csp
         for header, value in {
             "x-frame-options": "DENY",
@@ -86,6 +88,10 @@ async def main() -> None:
         }.items():
             assert login_response.headers[header] == value or value in login_response.headers[header]
         form = login_response.body.decode()
+        assert 'name="state"' in form
+        assert 'name="nonce"' in form
+        assert 'name="email"' in form
+        assert 'name="password"' in form
         nonce = re.search(r'name="nonce" value="([^"]+)"', form).group(1)
 
         async def fake_login(email, password, remember_device=True):

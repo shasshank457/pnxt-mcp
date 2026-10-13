@@ -52,53 +52,49 @@ def _page(
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in to PointNXT</title>
 <style>
-:root {{ color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #15213d; background: #f7f8fa; }}
-* {{ box-sizing: border-box; }}
+:root {{ color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0f172a; background: #f7f8fa; }}
+*, *::before, *::after {{ box-sizing: border-box; }}
 body {{ min-height: 100vh; margin: 0; display: flex; justify-content: center; background: #f7f8fa; }}
-.shell {{ width: min(100%, 620px); padding: 84px 24px 52px; text-align: center; }}
-.brand {{ margin: 0 auto 39px; font-size: 25px; font-weight: 500; letter-spacing: -1.8px; line-height: 1; }}
-.brand-point {{ color: #663b9d; }} .brand-nxt {{ color: #f5a623; }}
-.card {{ width: min(100%, 504px); margin: 0 auto; padding: 42px 41px 38px; text-align: left; background: #fff; border: 1px solid #dfe2e8; border-radius: 18px; box-shadow: 0 12px 22px rgba(22, 31, 52, .12); }}
-h1 {{ margin: 0; color: #15213d; font-size: 29px; line-height: 1.2; letter-spacing: -.8px; }}
-.subcopy, .support, .footer {{ color: #737d91; font-size: 15px; }}
-.subcopy {{ margin: 13px 0 30px; }}
-.link {{ color: #7410c4; text-decoration: none; }}
-.field {{ display: block; margin: 0 0 13px; color: #15213d; font-size: 15px; font-weight: 600; }}
-.field-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; }}
+.shell {{ width: min(100%, 720px); padding: 40px 24px 48px; text-align: center; }}
+.brand {{ margin: 0 auto 48px; font-size: 32px; font-weight: 700; letter-spacing: .4px; line-height: 1; }}
+.brand-point {{ color: #5b2a86; }} .brand-nxt {{ color: #f7941d; }}
+.card {{ width: 100%; max-width: 600px; margin: 48px auto; padding: 48px; text-align: left; background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; box-shadow: 0 4px 24px rgba(16,24,40,.06); }}
+h1 {{ margin: 0 0 8px; color: #0f172a; font-size: 28px; line-height: 1.2; font-weight: 700; }}
+.subcopy, .support {{ color: #64748b; font-size: 16px; }}
+.subcopy {{ margin: 0; }}
+.field {{ display: block; margin: 24px 0 8px; color: #0f172a; font-size: 16px; font-weight: 500; }}
+.field-row {{ display: flex; justify-content: space-between; align-items: center; margin: 24px 0 8px; }}
 .field-row .field {{ margin: 0; }}
-.muted-link {{ color: #737d91; font-weight: 400; text-decoration: none; }}
-input[type=email], input[type=password] {{ display: block; width: 100%; height: 41px; margin-top: 7px; padding: 0 13px; border: 1px solid #d9dde5; border-radius: 9px; color: #15213d; background: #fff; font: inherit; outline: none; }}
-input:focus {{ border-color: #7410c4; box-shadow: 0 0 0 3px rgba(116, 16, 196, .12); }}
-.password-wrap {{ position: relative; }} .password-wrap input {{ padding-right: 44px; }}
-.toggle-password {{ position: absolute; top: 50%; right: 10px; width: 28px; height: 28px; transform: translateY(-50%); border: 0; color: #737d91; background: transparent; cursor: pointer; font-size: 17px; }}
-.remember {{ display: flex; align-items: center; gap: 8px; margin: 9px 0 27px; color: #737d91; font-size: 15px; }}
-.remember input {{ width: 18px; height: 18px; margin: 0; accent-color: #7410c4; }}
-.submit {{ display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; height: 42px; border: 0; border-radius: 9px; color: white; background: #790bc5; font: inherit; font-weight: 600; font-size: 16px; cursor: pointer; }}
-.submit:hover {{ background: #6808ac; }} .submit svg {{ width: 18px; height: 18px; }}
-.support {{ margin: 27px 0 0; text-align: center; }} .support a {{ color: #15213d; text-decoration: underline; text-underline-offset: 3px; }}
-.footer {{ margin-top: 32px; text-align: center; font-size: 13px; }} .security {{ margin-bottom: 12px; }} .security::before {{ content: "♢"; color: #16a05d; margin-right: 8px; font-size: 17px; }}
-.footer-links {{ color: #a0a7b5; }} .footer-links span {{ margin: 0 3px; }} .footer-links a {{ color: #8b93a3; text-underline-offset: 3px; }}
-.error {{ margin: -10px 0 18px; padding: 10px 12px; border-radius: 8px; color: #9b1c1c; background: #fff1f1; font-size: 14px; }}
-@media (max-width: 560px) {{ .shell {{ padding: 42px 16px 32px; }} .brand {{ margin-bottom: 28px; }} .card {{ padding: 30px 22px 28px; border-radius: 14px; }} h1 {{ font-size: 26px; }} }}
+.muted-link {{ color: #64748b; font-weight: 400; text-decoration: none; }}
+.muted-link:hover {{ text-decoration: underline; }}
+input[type=email], input[type=password] {{ display: block; width: 100%; height: 48px; margin: 0; padding: 0 16px; border: 1px solid #e2e8f0; border-radius: 8px; color: #0f172a; background: #eef2fb; font: inherit; outline: none; }}
+input:focus {{ border-color: #7210b8; box-shadow: 0 0 0 3px rgba(114,16,184,.15); outline: none; }}
+.password-wrap {{ position: relative; }} .password-wrap input {{ padding-right: 48px; }}
+.toggle-password {{ position: absolute; top: 50%; right: 12px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); border: 0; color: #64748b; background: transparent; cursor: pointer; }}
+.toggle-password svg {{ width: 20px; height: 20px; }}
+.submit {{ display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 48px; margin-top: 32px; border: 0; border-radius: 8px; color: #fff; background: #7210b8; font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }}
+.submit:hover {{ background: #5f0d99; }} .submit:disabled {{ cursor: wait; opacity: .75; }} .submit svg {{ width: 20px; height: 20px; }}
+.support {{ margin: 24px 0 0; text-align: center; font-size: 14px; }} .support span {{ color: #0f172a; text-decoration: underline; text-underline-offset: 3px; }}
+.error {{ margin: 24px 0 0; padding: 12px; border-radius: 8px; color: #b42318; background: #fef3f2; font-size: 14px; }}
+@media (max-width: 640px) {{ .shell {{ padding: 24px 16px 32px; }} .brand {{ margin-bottom: 32px; font-size: 28px; }} .card {{ margin: 32px auto; padding: 24px; }} }}
 </style></head>
 <body><main class="shell">
 <div class="brand" aria-label="PointNXT"><span class="brand-point">POINT</span><span class="brand-nxt">NXT</span></div>
 <section class="card" aria-labelledby="login-title">
 <h1 id="login-title">Welcome back</h1>
-<p class="subcopy">Don't have an account? <span class="link">Sign up</span></p>
+<p class="subcopy">Sign in to connect PointNXT to Claude.</p>
 {error_html}
 <form method="post" action="/auth/login">
 <input type="hidden" name="state" value="{escaped_state}">
 <input type="hidden" name="nonce" value="{escaped_nonce}">
 <label class="field">Email<input type="email" name="email" autocomplete="username" placeholder="name@example.com" required></label>
-<div class="field-row"><label class="field" for="password">Password</label><span class="muted-link">Forgot password?</span></div>
-<div class="password-wrap"><input id="password" type="password" name="password" autocomplete="current-password" required><button class="toggle-password" type="button" aria-label="Show password" data-password-toggle>⌧</button></div>
-<button class="submit" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M13 5l7 7-7 7M20 12H4"/></svg>Sign in</button>
+<div class="field-row"><label class="field" for="password">Password</label><a class="muted-link" href="https://app.pointnxt.com/login">Forgot password?</a></div>
+<div class="password-wrap"><input id="password" type="password" name="password" autocomplete="current-password" required><button class="toggle-password" type="button" aria-label="Show password" data-password-toggle><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z"/><circle cx="12" cy="12" r="2.5"/></svg><svg class="eye-off-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" hidden><path d="m3 3 18 18M10.6 6.2A10.8 10.8 0 0 1 12 6c6 0 9.5 6 9.5 6a16.7 16.7 0 0 1-3.1 3.7M6.7 6.8C3.9 8.2 2.5 12 2.5 12s3.5 6 9.5 6c1.1 0 2.1-.2 3-.5"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div>
+<button class="submit" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 5l7 7-7 7M22 12H8"/><path d="M2 12h6"/></svg><span data-submit-label>Sign in</span></button>
 </form>
 <p class="support">Trouble signing in? <span>Contact Support</span></p>
 </section>
-<footer class="footer"><div class="security">Protected by enterprise-grade security</div><div class="footer-links">© 2026 PointNXT <span>·</span> Terms <span>·</span> Privacy Policy <span>·</span> Data Deletion</div></footer>
-</main><script>document.querySelector('[data-password-toggle]').addEventListener('click',function(){{const p=document.getElementById('password');const shown=p.type==='text';p.type=shown?'password':'text';this.textContent=shown?'⌧':'◉';this.setAttribute('aria-label',shown?'Show password':'Hide password');}});</script>
+</main><script>const form=document.querySelector('form');const toggle=document.querySelector('[data-password-toggle]');const password=document.getElementById('password');const eye=toggle.querySelector('.eye-icon');const eyeOff=toggle.querySelector('.eye-off-icon');toggle.addEventListener('click',function(){{const shown=password.type==='text';password.type=shown?'password':'text';eye.hidden=!shown;eyeOff.hidden=shown;this.setAttribute('aria-label',shown?'Show password':'Hide password');}});form.addEventListener('submit',function(){{const button=form.querySelector('.submit');button.disabled=true;form.querySelector('[data-submit-label]').textContent='Signing in…';}});</script>
 </body>
 </html>"""
     headers = _SECURITY_HEADERS
