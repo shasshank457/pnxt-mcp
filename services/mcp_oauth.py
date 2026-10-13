@@ -379,3 +379,23 @@ def validate_bearer(token: str, session_key: str) -> bool:
         return False
     session_store.set_(session_key, durable)
     return True
+
+
+def validate_bearer_credential(token: str) -> bool:
+    """Validate an MCP bearer token before transport-session binding."""
+    record = session_store.get_mcp_token(_hash(token))
+    if not record:
+        return False
+    durable = session_store.get(record["auth_session_key"])
+    return bool(
+        durable
+        and all(
+            (
+                record.get("resource") == MCP_RESOURCE,
+                durable.user_id == record.get("user_id"),
+                durable.tenant_id == record.get("tenant_id"),
+                durable.membership_id == record.get("membership_id"),
+                durable.is_authenticated(),
+            )
+        )
+    )

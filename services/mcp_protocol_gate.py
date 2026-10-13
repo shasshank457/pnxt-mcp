@@ -9,6 +9,8 @@ from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from config import MCP_PUBLIC_BASE_URL
+
 
 class MCPProtocolGate:
     """Keep the application on the handshake-era, stateful MCP transport."""
@@ -20,6 +22,31 @@ class MCPProtocolGate:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") != "http" or scope.get("path") != self.mcp_path:
             await self.app(scope, receive, send)
+            return
+
+        headers = scope.get("headers", ())
+        authorization = _header_value(headers, "authorization") or ""
+        challenge = (
+            f'Bearer resource_metadata="{MCP_PUBLIC_BASE_URL.rstrip("/")}'
+            '/.well-known/oauth-protected-resource"'
+        )
+        if not authorization.lower().startswith("bearer "):
+            response = JSONResponse(
+                {"error": "invalid_token", "error_description": "Authentication required"},
+                status_code=401,
+                headers={"WWW-Authenticate": challenge},
+            )
+            await response(scope, receive, send)
+            return
+        from services.mcp_oauth import validate_bearer_credential
+
+        if not validate_bearer_credential(authorization[7:].strip()):
+            response = JSONResponse(
+                {"error": "invalid_token", "error_description": "Invalid access token"},
+                status_code=401,
+                headers={"WWW-Authenticate": challenge},
+            )
+            await response(scope, receive, send)
             return
 
         protocol_version = _header_value(scope.get("headers", ()), MCP_PROTOCOL_VERSION_HEADER)

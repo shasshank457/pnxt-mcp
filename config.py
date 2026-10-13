@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -39,3 +40,26 @@ MCP_SESSION_ENCRYPTION_REQUIRED = os.getenv(
 # value deliberately trusts no forwarded headers; deployments behind TLS
 # proxies must configure this explicitly.
 MCP_FORWARDED_ALLOW_IPS = os.getenv("MCP_FORWARDED_ALLOW_IPS", "")
+
+
+def validate_mcp_oauth_configuration() -> None:
+    """Validate the optional fixed-client callback at startup."""
+    callback = MCP_OAUTH_REDIRECT_URI
+    if not callback:
+        return
+    if callback != callback.strip():
+        raise RuntimeError("MCP_OAUTH_REDIRECT_URI must not contain surrounding whitespace")
+    try:
+        parsed = urlsplit(callback)
+    except ValueError as exc:
+        raise RuntimeError("MCP_OAUTH_REDIRECT_URI is not a valid callback URL") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise RuntimeError(
+            "MCP_OAUTH_REDIRECT_URI must be an HTTPS callback URL without credentials or fragments"
+        )

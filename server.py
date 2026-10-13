@@ -1,7 +1,7 @@
 from mcp.server.mcpserver import MCPServer
 from mcp_types import ToolAnnotations
 
-from config import MCP_FORWARDED_ALLOW_IPS
+from config import MCP_FORWARDED_ALLOW_IPS, validate_mcp_oauth_configuration
 from prompts import register_prompts
 from services import auth_bridge, session_store
 from services.mcp_oauth import (
@@ -520,6 +520,7 @@ def get_mcp_metrics():
 
 
 if __name__ == "__main__":
+    validate_mcp_oauth_configuration()
     mcp.run()
 
 
@@ -527,6 +528,7 @@ def run_http(*, host: str = "127.0.0.1", port: int = 8000) -> None:
     """Run the stateful HTTP server with the application protocol gate."""
     import anyio
 
+    validate_mcp_oauth_configuration()
     anyio.run(_run_http, host, port)
 
 
