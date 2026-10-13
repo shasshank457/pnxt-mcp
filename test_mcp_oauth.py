@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import AsyncMock, patch
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from services import mcp_oauth, session_store
 from services.auth_session import set_session

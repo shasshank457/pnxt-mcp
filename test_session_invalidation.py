@@ -1,7 +1,8 @@
 """Regression tests for MCP grant revocation during auth-session invalidation."""
 
-import pytest
 from types import SimpleNamespace
+
+import pytest
 
 from services import session_store
 from services.auth_session import AuthSession, invalidate_session

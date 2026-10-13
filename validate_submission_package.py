@@ -20,7 +20,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parent
 PACKAGE_ALLOWLIST = ("plugin.json", "mcp.json")
 SCHEMA_URLS = {
@@ -69,7 +68,7 @@ def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
 def fetch_schema(url: str) -> tuple[dict[str, Any] | None, str | None]:
     request = urllib.request.Request(url, headers={"User-Agent": "PointNXT-local-validator/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - fixed official HTTPS URL
+        with urllib.request.urlopen(request, timeout=5) as response:
             value = json.loads(response.read().decode("utf-8"))
         return value, None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, urllib.error.URLError) as error:
@@ -100,9 +99,7 @@ def forbidden_paths() -> list[str]:
     # Only inspect names at the repository root. Forbidden directories are
     # rejected as package inputs without walking or opening their contents.
     for path in ROOT.iterdir():
-        if path.name in FORBIDDEN_DIRECTORY_NAMES:
-            findings.append(path.name)
-        elif any(pattern.search(path.name) for pattern in FORBIDDEN_NAME_PATTERNS):
+        if path.name in FORBIDDEN_DIRECTORY_NAMES or any(pattern.search(path.name) for pattern in FORBIDDEN_NAME_PATTERNS):
             findings.append(path.name)
     return sorted(set(findings))
 

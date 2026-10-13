@@ -17,8 +17,8 @@ from config import (
     POINTNXT_LOGIN_URL,
 )
 from services import auth_bridge, session_store
-from services.auth_session import get_session, invalidate_session
 from services.auth_session import current_user as session_user
+from services.auth_session import get_session, invalidate_session
 from services.request_context import get_request_key, reset_request_key, set_request_key
 from services.session_manager import create_authenticated_session
 

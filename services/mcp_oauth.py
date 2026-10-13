@@ -1,13 +1,12 @@
 """OAuth 2.0 Authorization Code + PKCE adapter for the MCP server."""
 import base64
 import hashlib
+import html
 import secrets
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-import html
-from starlette.responses import JSONResponse, RedirectResponse
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from config import (
     AUTH_CALLBACK_TIMEOUT,

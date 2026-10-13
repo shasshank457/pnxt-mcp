@@ -1,17 +1,17 @@
 from mcp.server.mcpserver import MCPServer
 from mcp_types import ToolAnnotations
 
-from prompts import register_prompts
 from config import MCP_FORWARDED_ALLOW_IPS
+from prompts import register_prompts
 from services import auth_bridge, session_store
 from services.mcp_oauth import (
     authorize as oauth_authorize,
 )
-from services.mcp_oauth import consent as oauth_consent
-from services.mcp_oauth import consent_decision as oauth_consent_decision
 from services.mcp_oauth import (
     callback as oauth_callback,
 )
+from services.mcp_oauth import consent as oauth_consent
+from services.mcp_oauth import consent_decision as oauth_consent_decision
 from services.mcp_oauth import (
     metadata_authorization_server,
     metadata_protected_resource,
