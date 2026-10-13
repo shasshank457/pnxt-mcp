@@ -5,11 +5,12 @@ services:
     env_file:
       - .env
     environment:
+      MCP_FORWARDED_ALLOW_IPS: "172.19.0.1"
       POINTNXT_SESSION_STORE_PATH: /var/lib/pnxt-mcp/pointnxt-sessions.sqlite3
     volumes:
       - pnxt-mcp-data:/var/lib/pnxt-mcp
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     restart: unless-stopped
     healthcheck:
       test:
@@ -24,3 +25,10 @@ services:
 
 volumes:
   pnxt-mcp-data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+          gateway: 172.19.0.1
