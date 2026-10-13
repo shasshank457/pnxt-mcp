@@ -43,6 +43,17 @@ _CONSENT_SECURITY_HEADERS = {
 }
 
 
+def _consent_headers(redirect_uri: str) -> dict[str, str]:
+    headers = _CONSENT_SECURITY_HEADERS.copy()
+    parsed = urlsplit(redirect_uri)
+    if parsed.scheme and parsed.netloc:
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        headers["Content-Security-Policy"] = headers[
+            "Content-Security-Policy"
+        ].replace("form-action 'self'", f"form-action 'self' {origin}")
+    return headers
+
+
 def _client_ok(client_id: str, redirect_uri: str) -> bool:
     try:
         is_https = urlsplit(redirect_uri).scheme == "https"
@@ -203,7 +214,10 @@ refund, or other write tools.</p>
 </form>
 </body>
 </html>"""
-    return HTMLResponse(body, headers=_CONSENT_SECURITY_HEADERS)
+    return HTMLResponse(
+        body,
+        headers=_consent_headers(transaction["redirect_uri"]),
+    )
 
 
 def _session_matches_consent(transaction: dict, session) -> bool:

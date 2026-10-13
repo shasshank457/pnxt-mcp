@@ -70,10 +70,13 @@ def _approve_request(consent_id="consent-1", decision="approved"):
 
 @pytest.mark.asyncio
 async def test_consent_page_displays_safe_application_and_capabilities():
-    _put()
+    _put(redirect_uri="https://claude.ai/api/mcp/auth_callback")
     response = await mcp_oauth.consent(Request(query="consent_id=consent-1"))
     body = response.body.decode()
     assert response.status_code == 200
+    assert "form-action 'self' https://claude.ai" in response.headers[
+        "content-security-policy"
+    ]
     assert "Claude &amp; PointNXT" in body
     assert "PointNXT MCP" in body
     assert "Scope: <code>mcp</code>" in body
