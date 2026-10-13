@@ -72,11 +72,13 @@ async def main() -> None:
         assert "PointNXT" not in login_location
 
         login_response = await auth_bridge.login_page(
-            Request("state=bridge-state")
+            Request(urlsplit(login_location).query)
         )
         assert login_response.status_code == 200
+        csp = login_response.headers["content-security-policy"]
+        assert "form-action 'self' https://claude.ai" in csp
+        assert "script-src 'unsafe-inline'" in csp
         for header, value in {
-            "content-security-policy": "form-action 'self' https://claude.ai",
             "x-frame-options": "DENY",
             "x-content-type-options": "nosniff",
             "referrer-policy": "no-referrer",

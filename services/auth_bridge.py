@@ -145,7 +145,11 @@ async def login_page(request):
     nonce = secrets.token_urlsafe(32)
     if not session_store.set_auth_bridge_nonce(state, nonce):
         return _error("Authentication request is invalid or expired.")
-    return _page(state, nonce, redirect_uri=transaction.get("redirect_uri"))
+    return _page(
+        state,
+        nonce,
+        redirect_uri=(transaction.get("payload") or {}).get("redirect_uri"),
+    )
 
 
 async def login_submit(request):
@@ -207,7 +211,7 @@ async def login_submit(request):
             state,
             next_nonce,
             "PointNXT sign-in failed.",
-            claimed.get("redirect_uri"),
+            (claimed.get("payload") or {}).get("redirect_uri"),
         )
 
     if not session_store.complete_auth_bridge_transaction(state):
