@@ -4,6 +4,7 @@ requests
 httpx
 mcp
 python-dotenv
+tzdata
 cryptography
 pytest
 pytest-asyncio

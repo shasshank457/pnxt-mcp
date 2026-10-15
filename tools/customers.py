@@ -2,8 +2,17 @@
 
 from typing import Any
 
+from services.customer_matching import (
+    normalize_email,
+    normalize_phone,
+    order_matches_contact,
+)
+from services.timezone import local_timestamp
 from services.validation import optional_id, optional_text, page_limit
 from tools.orders import get_orders
+from tools.status_options import RETURN_STATUSES
+
+CUSTOMER_HISTORY_MAX_PAGES = 10
 
 
 def _customer_from_order(order: dict[str, Any]) -> dict[str, Any]:
@@ -20,13 +29,27 @@ def _customer_from_order(order: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _candidate_key(customer: dict[str, Any]) -> str:
-    return (
-        customer.get("id")
-        or customer.get("email")
-        or customer.get("phone")
-        or customer.get("name", "").strip().lower()
-    )
+def _customer_identity_values(customer: dict[str, Any]) -> set[str]:
+    values = set()
+    if customer.get("id"):
+        values.add(f"id:{customer['id']}")
+    if customer.get("email"):
+        values.add(f"email:{normalize_email(customer['email'])}")
+    if customer.get("phone"):
+        values.add(f"phone:{normalize_phone(customer['phone'])}")
+    if not values and customer.get("name"):
+        values.add(f"name:{customer['name'].strip().lower()}")
+    return values
+
+
+def _merge_customer(existing: dict[str, Any], incoming: dict[str, Any]) -> None:
+    record_ids = existing.setdefault("record_ids", [existing.get("id")])
+    incoming_id = incoming.get("id")
+    if incoming_id and incoming_id not in record_ids:
+        record_ids.append(incoming_id)
+    for field in ("id", "name", "email", "phone"):
+        if not existing.get(field) and incoming.get(field):
+            existing[field] = incoming[field]
 
 
 async def find_customers(
@@ -46,23 +69,40 @@ async def find_customers(
     optional_text(phone, "phone")
     optional_id(customer_id, "customer_id")
 
+    normalized_email = normalize_email(email)
+    normalized_phone = normalize_phone(phone)
     response = await get_orders(
         limit=limit,
         page=page,
         customer_id=customer_id,
-        customer_email=email,
-        customer_phone=phone,
+        customer_email=normalized_email or None,
+        customer_phone=normalized_phone or None,
         order_no=name,
     )
     items = response.get("data", {}).get("items", []) or []
-    candidates: dict[str, dict[str, Any]] = {}
+    candidates: list[dict[str, Any]] = []
     for order in items:
+        if (email or phone) and not order_matches_contact(
+            order, normalized_email, normalized_phone
+        ):
+            continue
         customer = _customer_from_order(order)
-        key = _candidate_key(customer)
-        if key:
-            candidates[key] = customer
+        identities = _customer_identity_values(customer)
+        match = next(
+            (
+                candidate
+                for candidate in candidates
+                if identities & _customer_identity_values(candidate)
+            ),
+            None,
+        )
+        if match:
+            _merge_customer(match, customer)
+        elif identities:
+            customer["record_ids"] = [customer.get("id")] if customer.get("id") else []
+            candidates.append(customer)
 
-    results = list(candidates.values())
+    results = candidates
     return {
         "found": bool(results),
         "ambiguous": len(results) > 1,
@@ -99,31 +139,59 @@ async def get_customer_context(
         }
 
     customer = matches[0]
-    orders_response = await get_orders(
-        limit=limit,
-        page=page,
-        customer_id=customer.get("id"),
-        customer_email=customer.get("email") if not customer.get("id") else None,
-        customer_phone=customer.get("phone") if not customer.get("id") else None,
+    record_ids = [
+        record_id
+        for record_id in (customer.get("record_ids") or [customer.get("id")])
+        if record_id
+    ]
+    order_responses = [
+        await get_orders(limit=limit, page=page, customer_id=record_id)
+        for record_id in record_ids
+        if record_id
+    ]
+    orders = [
+        order
+        for response in order_responses
+        for order in response.get("data", {}).get("items", []) or []
+    ]
+    metadata = order_responses[0].get("data", {}).get("metadata", {}) if order_responses else {}
+    history_orders, total_orders, totals_are_partial = await _customer_history(
+        record_ids
     )
-    orders = orders_response.get("data", {}).get("items", []) or []
-    total_value = sum(
+    page_value = sum(
         order.get("grandTotal", order.get("orderTotal", 0)) or 0 for order in orders
+    )
+    total_value = sum(
+        order.get("grandTotal", order.get("orderTotal", 0)) or 0
+        for order in history_orders
+    )
+    status_counts: dict[str, int] = {}
+    for order in history_orders:
+        status = order.get("orderStatus")
+        if status:
+            status_counts[status] = status_counts.get(status, 0) + 1
+    dates = [
+        order.get("orderDate") or order.get("createdAt")
+        for order in history_orders
+        if order.get("orderDate") or order.get("createdAt")
+    ]
+    product_returns = sum(
+        1 for order in history_orders if order.get("orderStatus") in RETURN_STATUSES
     )
     return {
         "found": True,
         "ambiguous": False,
         "customer": customer,
         "statistics": {
-            "orders_returned": len(orders),
-            "total_orders": orders_response.get("data", {}).get("metadata", {}).get(
-                "totalItems", len(orders)
-            ),
-            "order_value_returned": total_value,
-            "status_counts": {
-                status: sum(1 for order in orders if order.get("orderStatus") == status)
-                for status in sorted({order.get("orderStatus") for order in orders if order.get("orderStatus")})
-            },
+            "orders_in_page": len(orders),
+            "order_value_in_page": page_value,
+            "total_orders": total_orders,
+            "total_order_value": total_value,
+            "status_counts": dict(sorted(status_counts.items())),
+            "first_order_date": min(dates) if dates else None,
+            "last_order_date": max(dates) if dates else None,
+            "totals_are_partial": totals_are_partial,
+            "product_returns": product_returns,
         },
         "orders": [
             {
@@ -131,6 +199,8 @@ async def get_customer_context(
                 "order_number": order.get("orderNo"),
                 "channel_order_number": order.get("channelOrderNo"),
                 "date": order.get("orderDate"),
+                "order_date": order.get("orderDate"),
+                "order_date_local": local_timestamp(order.get("orderDate")),
                 "status": order.get("orderStatus"),
                 "total": order.get("grandTotal", order.get("orderTotal")),
                 "items": [
@@ -140,5 +210,47 @@ async def get_customer_context(
             }
             for order in orders
         ],
-        "pagination": orders_response.get("data", {}).get("metadata", {}),
+        "pagination": metadata,
     }
+
+
+async def _customer_history(
+    record_ids: list[str],
+) -> tuple[list[dict[str, Any]], int, bool]:
+    history: dict[str, dict[str, Any]] = {}
+    total_orders = 0
+    totals_are_partial = False
+    for record_id in record_ids:
+        page = 1
+        record_total: int | None = None
+        record_items = 0
+        while page <= CUSTOMER_HISTORY_MAX_PAGES:
+            response = await get_orders(
+                limit=100,
+                page=page,
+                customer_id=record_id,
+            )
+            data = response.get("data", {})
+            items = data.get("items", []) or []
+            metadata = data.get("metadata", {}) or {}
+            total = metadata.get("totalItems", metadata.get("total"))
+            if isinstance(total, int):
+                record_total = total
+            for order in items:
+                order_id = order.get("id") or f"{record_id}:{record_items}"
+                history[order_id] = order
+                record_items += 1
+            if not items or (
+                isinstance(record_total, int) and record_items >= record_total
+            ) or (not isinstance(record_total, int) and len(items) < 100):
+                break
+            if page == CUSTOMER_HISTORY_MAX_PAGES:
+                totals_are_partial = True
+                break
+            page += 1
+        if record_total is None:
+            record_total = record_items
+        total_orders += record_total
+        if page > CUSTOMER_HISTORY_MAX_PAGES:
+            totals_are_partial = True
+    return list(history.values()), total_orders, totals_are_partial

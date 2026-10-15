@@ -17,19 +17,11 @@ def assert_tool_annotations() -> None:
     from server import mcp
 
     names = set(mcp._tool_manager._tools)
-    local_read_only = {
-        "current_user",
-        "auth_status",
-        "check_authentication",
-        "check_configuration",
-        "get_mcp_metrics",
-    }
     assert "authenticate_with_pointnxt" not in names
     assert "login_with_credentials" not in names
     expected_read_only = {
-        name: (True, False, name not in local_read_only)
+        name: (True, False, False)
         for name in names
-        if name != "logout_pointnxt"
     }
     for name, (read_only, destructive, open_world) in expected_read_only.items():
         annotations = mcp._tool_manager._tools[name].annotations
@@ -38,12 +30,7 @@ def assert_tool_annotations() -> None:
         assert annotations.destructive_hint is destructive, name
         assert annotations.open_world_hint is open_world, name
 
-    for name in ("logout_pointnxt",):
-        annotations = mcp._tool_manager._tools[name].annotations
-        assert annotations is not None, name
-        assert annotations.read_only_hint is False, name
-        assert annotations.destructive_hint is False, name
-        assert annotations.open_world_hint is True, name
+    assert "logout_pointnxt" not in names
 
 
 def test_tool_annotations() -> None:

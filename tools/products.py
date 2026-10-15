@@ -1,8 +1,13 @@
 from typing import Any
 
 from services.pointnxt_api import PointNXTAPI
+from tools.status_options import PRODUCT_STATUSES
 
 MAX_PRODUCT_PAGE_SIZE = 100
+PRODUCT_LIST_COUNT_BASIS = "Paginated products returned by /commerce/products."
+PRODUCT_SUMMARY_COUNT_BASIS = (
+    "Backend aggregate product summary; its scope may differ from product-list pages."
+)
 
 
 def get_api() -> PointNXTAPI:
@@ -31,6 +36,10 @@ async def get_products(
         raise ValueError("page must be a positive integer")
     if limit > MAX_PRODUCT_PAGE_SIZE:
         raise ValueError(f"limit must be at most {MAX_PRODUCT_PAGE_SIZE}")
+    if status is not None and (
+        not isinstance(status, str) or status.upper() not in PRODUCT_STATUSES
+    ):
+        raise ValueError(f"status must be one of: {', '.join(PRODUCT_STATUSES)}")
 
     params = {
         key: value
@@ -56,8 +65,8 @@ async def get_products(
 
 async def get_product_summary() -> dict[str, Any]:
     """Retrieve product and inventory summary metrics from the backend."""
-
-    return await get_api().async_get("/commerce/products/summary")
+    response = await get_api().async_get("/commerce/products/summary")
+    return {**response, "count_basis": PRODUCT_SUMMARY_COUNT_BASIS}
 
 
 async def get_product_by_id(product_id: str) -> dict[str, Any]:
@@ -69,6 +78,68 @@ async def get_product_by_id(product_id: str) -> dict[str, Any]:
     return await get_api().async_get(f"/commerce/products/{product_id}")
 
 
+def _name(value: Any, *fallbacks: Any) -> str | None:
+    for candidate in (value, *fallbacks):
+        if isinstance(candidate, dict):
+            candidate = candidate.get("name") or candidate.get("label")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def _stock_rows(product: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = product.get("inventory") or product.get("stocks")
+    if isinstance(raw, dict):
+        nested = raw.get("warehouses") or raw.get("items") or raw.get("stocks")
+        if isinstance(nested, list):
+            return [row for row in nested if isinstance(row, dict)]
+        if raw.get("tracked") is False:
+            return []
+        return [raw]
+    if isinstance(raw, list):
+        return [row for row in raw if isinstance(row, dict)]
+    return []
+
+
+def _compact_inventory(product: dict[str, Any]) -> dict[str, Any]:
+    rows = _stock_rows(product)
+    raw_inventory = product.get("inventory")
+    if raw_inventory is not None and isinstance(raw_inventory, dict) and raw_inventory.get("tracked") is False:
+        return {"tracked": False}
+    if not rows:
+        return {"tracked": False}
+
+    warehouses: dict[str, dict[str, Any]] = {}
+    on_hand = available = reserved = 0
+    for row in rows:
+        warehouse = row.get("warehouse") or {}
+        code = (
+            row.get("warehouseCode")
+            or row.get("warehouse_code")
+            or (warehouse.get("code") if isinstance(warehouse, dict) else None)
+            or "unknown"
+        )
+        row_on_hand = row.get("quantityOnHand", row.get("onHand", 0)) or 0
+        row_available = row.get("quantityAvailable", row.get("available", 0)) or 0
+        row_reserved = row.get("quantityReserved", row.get("reserved", 0)) or 0
+        on_hand += row_on_hand
+        available += row_available
+        reserved += row_reserved
+        current = warehouses.setdefault(
+            code, {"warehouse_code": code, "on_hand": 0, "available": 0, "reserved": 0}
+        )
+        current["on_hand"] += row_on_hand
+        current["available"] += row_available
+        current["reserved"] += row_reserved
+    return {
+        "tracked": True,
+        "on_hand": on_hand,
+        "available": available,
+        "reserved": reserved,
+        "by_warehouse": list(warehouses.values()),
+    }
+
+
 def _compact_product(product: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": product.get("id"),
@@ -76,10 +147,10 @@ def _compact_product(product: dict[str, Any]) -> dict[str, Any]:
         "name": product.get("name"),
         "status": product.get("status"),
         "barcode": product.get("barcode"),
-        "brand": product.get("brand"),
-        "category": product.get("category"),
-        "vendor": product.get("vendor"),
-        "inventory": product.get("inventory", product.get("stocks")),
+        "brand": _name(product.get("brand"), product.get("brandName")),
+        "category": _name(product.get("category"), product.get("categoryName")),
+        "vendor": _name(product.get("vendor"), product.get("vendorName")),
+        "inventory": _compact_inventory(product),
     }
 
 
@@ -99,6 +170,10 @@ async def search_products(
     warehouse_id: str | None = None,
 ) -> dict[str, Any]:
     """Search products through the existing catalog endpoint."""
+    if status is not None and (
+        not isinstance(status, str) or status.upper() not in PRODUCT_STATUSES
+    ):
+        raise ValueError(f"status must be one of: {', '.join(PRODUCT_STATUSES)}")
     if product_id:
         response = await get_product_by_id(product_id)
         product = response.get("data", response)
@@ -114,6 +189,7 @@ async def search_products(
         "found": bool(items),
         "products": [_compact_product(product) for product in items],
         "pagination": data.get("metadata", {}),
+        "count_basis": PRODUCT_LIST_COUNT_BASIS,
         "message": None if items else "No matching products found.",
     }
 

@@ -4,44 +4,79 @@ from typing import Any
 
 from services.validation import optional_id, optional_text, page_limit
 from tools.orders import get_orders
+from tools.status_options import RETURN_STATUSES
 
-RETURN_STATUSES = {
-    "RETURN_REQUESTED",
-    "RETURN_RECEIVED",
-    "PARTIALLY_RETURNED",
-    "RETURNED",
-    "REFUNDED",
-    "PARTIALLY_REFUNDED",
-}
+
+async def _all_orders_for_status(
+    status: str,
+    order_reference: str | None,
+    customer_id: str | None,
+    warehouse_id: str | None,
+) -> list[dict[str, Any]]:
+    """Fetch every page for one return status before merging statuses."""
+    orders: list[dict[str, Any]] = []
+    backend_limit = 100
+    backend_page = 1
+    while True:
+        response = await get_orders(
+            limit=backend_limit,
+            page=backend_page,
+            order_no=order_reference,
+            order_status=status,
+            customer_id=customer_id,
+            warehouse_id=warehouse_id,
+        )
+        data = response.get("data", {})
+        items = data.get("items", []) or []
+        orders.extend(items)
+        metadata = data.get("metadata", {}) or {}
+        total = metadata.get("totalItems", metadata.get("total"))
+        if not items or len(items) < backend_limit or (
+            isinstance(total, int) and len(orders) >= total
+        ):
+            return orders
+        backend_page += 1
+
+
+def _order_date(order: dict[str, Any]) -> str:
+    return order.get("orderDate") or order.get("createdAt") or ""
 
 
 def _return_item(item: dict[str, Any]) -> dict[str, Any]:
-    """Expose backend-provided return quantities without deriving them."""
+    """Expose only order-backed item fields; return quantities are not confirmed."""
     return {
-        "id": item.get("id"),
-        "sku": item.get("sku") or item.get("code") or item.get("channelSku"),
-        "name": item.get("name"),
-        "requested_quantity": item.get("returnQuantity", item.get("quantityReturned")),
-        "accepted_quantity": item.get("acceptedQuantity"),
-        "rejected_quantity": item.get("rejectedQuantity"),
-        "inspection_status": item.get("inspectionStatus"),
-        "putaway_status": item.get("putawayStatus"),
-        "stock_restoration_status": item.get("stockRestorationStatus"),
-        "raw_return_fields_available": any(
-            key in item
-            for key in (
-                "returnQuantity", "quantityReturned", "acceptedQuantity",
-                "rejectedQuantity", "inspectionStatus", "putawayStatus",
-                "stockRestorationStatus",
-            )
-        ),
+        key: value
+        for key, value in {
+            "sku": item.get("sku") or item.get("code") or item.get("channelSku"),
+            "name": item.get("name"),
+            "quantity_ordered": item.get("quantityOrdered", item.get("quantity")),
+        }.items()
+        if value is not None
+    }
+
+
+def _return_shipment(shipment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "awb_no": shipment.get("awbNo") or shipment.get("awb"),
+            "ship_status": shipment.get("shipStatus"),
+            "created_at": shipment.get("createdAt"),
+            "delivered_at": shipment.get("deliveredAt"),
+            "is_return": True,
+        }.items()
+        if value is not None or key == "delivered_at"
     }
 
 
 def _return_view(order: dict[str, Any]) -> dict[str, Any]:
     customer = order.get("customer") or {}
-    return {
-        "return_id": order.get("returnId") or order.get("id"),
+    view = {
+        "data_source": "order_status",
+        "note": (
+            "Return data is derived from order status. Item-level return quantities, "
+            "reasons and inspection details are not available from the backend."
+        ),
         "order_id": order.get("id"),
         "order_number": order.get("orderNo"),
         "channel_order_number": order.get("channelOrderNo"),
@@ -49,15 +84,20 @@ def _return_view(order: dict[str, Any]) -> dict[str, Any]:
         "status": order.get("returnStatus") or order.get("orderStatus"),
         "return_reason": order.get("returnReason"),
         "requested_at": order.get("returnRequestedAt"),
-        "received_at": order.get("returnedAt") or order.get("returnReceivedAt"),
-        "inspection_status": order.get("inspectionStatus"),
-        "putaway_status": order.get("putawayStatus"),
-        "stock_restoration_status": order.get("stockRestorationStatus"),
+        "received_at": order.get("returnReceivedAt"),
         "items": [_return_item(item) for item in order.get("orderItems", [])],
         "refund_status": order.get("refundStatus"),
         "refund_amount": order.get("refundAmount"),
         "refund_execution_available": False,
     }
+    return_shipments = [
+        _return_shipment(shipment)
+        for shipment in order.get("shipments", []) or []
+        if shipment.get("isReturn") is True
+    ]
+    if return_shipments:
+        view["return_shipments"] = return_shipments
+    return {key: value for key, value in view.items() if value is not None}
 
 
 async def search_returns(
@@ -68,7 +108,7 @@ async def search_returns(
     customer_id: str | None = None,
     warehouse_id: str | None = None,
 ) -> dict[str, Any]:
-    """Search return-related orders using existing order status filters."""
+    """Search orders by six return-related statuses; data is derived from order status."""
     page_limit(limit, page)
     optional_text(order_reference, "order_reference")
     optional_id(customer_id, "customer_id")
@@ -78,26 +118,46 @@ async def search_returns(
         normalized = return_status.upper()
         if normalized not in RETURN_STATUSES:
             raise ValueError(f"return_status must be one of: {', '.join(sorted(RETURN_STATUSES))}")
-    response = await get_orders(
-        limit=limit,
-        page=page,
-        order_no=order_reference,
-        order_status=return_status.upper() if return_status else "RETURN_REQUESTED",
-        customer_id=customer_id,
-        warehouse_id=warehouse_id,
-    )
-    data = response.get("data", {})
-    items = data.get("items", []) or []
+    if return_status is not None:
+        response = await get_orders(
+            limit=limit,
+            page=page,
+            order_no=order_reference,
+            order_status=return_status.upper(),
+            customer_id=customer_id,
+            warehouse_id=warehouse_id,
+        )
+        data = response.get("data", {})
+        items = data.get("items", []) or []
+        pagination = data.get("metadata", {})
+    else:
+        items = []
+        for status in RETURN_STATUSES:
+            items.extend(
+                await _all_orders_for_status(
+                    status, order_reference, customer_id, warehouse_id
+                )
+            )
+        items.sort(key=_order_date, reverse=True)
+        total_items = len(items)
+        start = (page - 1) * limit
+        items = items[start : start + limit]
+        pagination = {
+            "page": page,
+            "limit": limit,
+            "totalItems": total_items,
+            "in_page": len(items),
+        }
     return {
         "found": bool(items),
         "returns": [_return_view(order) for order in items],
-        "pagination": data.get("metadata", {}),
+        "pagination": pagination,
         "message": None if items else "No matching return records found.",
     }
 
 
 async def get_order_returns(order_reference: str) -> dict[str, Any]:
-    """Find return information for a display or channel order reference."""
+    """Show order-status-derived return information for a display or channel order reference."""
     optional_text(order_reference, "order_reference", required=True)
     reference = order_reference.strip().lstrip("#")
     matches = []

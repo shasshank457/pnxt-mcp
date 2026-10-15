@@ -1,31 +1,20 @@
-import re
-from datetime import datetime, timezone
 from typing import Any
 
+from services.customer_matching import (
+    normalize_email,
+    normalize_phone,
+    order_matches_contact,
+)
 from services.pointnxt_api import PointNXTAPI
+from services.timezone import local_date_period, local_timestamp, resolve_timezone
+from tools.status_options import ORDER_STATUSES
 
 
 def get_api() -> PointNXTAPI:
     return PointNXTAPI()
 
 
-SUPPORTED_ORDER_STATUSES = {
-    "PENDING",
-    "CONFIRMED",
-    "ON_HOLD",
-    "PARTIALLY_FULFILLED",
-    "FULFILLED",
-    "DELIVERED",
-    "CANCELLED",
-    "RETURN_REQUESTED",
-    "RETURN_RECEIVED",
-    "PARTIALLY_RETURNED",
-    "RETURNED",
-    "REFUNDED",
-    "PARTIALLY_REFUNDED",
-    "DISPUTED",
-    "CLOSED",
-}
+SUPPORTED_ORDER_STATUSES = frozenset(ORDER_STATUSES)
 MAX_ORDER_PAGE_SIZE = 100
 
 
@@ -35,6 +24,7 @@ def _validate_order_filters(
     order_status: str | None,
     start_date: str | None,
     end_date: str | None,
+    timezone_name: str | None,
 ) -> None:
     if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
         raise ValueError("limit must be a positive integer")
@@ -53,18 +43,7 @@ def _validate_order_filters(
                 f"{', '.join(sorted(SUPPORTED_ORDER_STATUSES))}"
             )
 
-    date_pattern = r"^\d{4}-\d{2}-\d{2}$"
-    for name, value in (("start_date", start_date), ("end_date", end_date)):
-        if value is not None:
-            if not isinstance(value, str) or not re.fullmatch(date_pattern, value):
-                raise ValueError(f"{name} must use YYYY-MM-DD format")
-            try:
-                datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            except ValueError as error:
-                raise ValueError(f"{name} must use YYYY-MM-DD format") from error
-
-    if start_date and end_date and end_date < start_date:
-        raise ValueError("end_date cannot be before start_date")
+    local_date_period(start_date, end_date, timezone_name)
 
 
 async def get_orders(
@@ -82,10 +61,18 @@ async def get_orders(
     customer_email: str | None = None,
     customer_phone: str | None = None,
     channel_order_id: str | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
-    _validate_order_filters(limit, page, order_status, start_date, end_date)
+    _validate_order_filters(limit, page, order_status, start_date, end_date, timezone)
+    period = local_date_period(start_date, end_date, timezone)
+    timezone_name, _ = resolve_timezone(timezone)
 
     params = {}
+    search = order_no
+    if not search and customer_email:
+        search = normalize_email(customer_email)
+    elif not search and customer_phone:
+        search = normalize_phone(customer_phone)
     optional_params = {
         "limit": limit,
         "page": page,
@@ -95,16 +82,17 @@ async def get_orders(
         "sellerId": seller_id,
         "warehouseId": warehouse_id,
         "customerId": customer_id,
-        "dateFrom": start_date,
-        "dateTo": end_date,
-        "search": (order_no or customer_email or customer_phone or channel_order_id),
+        "dateFrom": period["utc_start"],
+        "dateTo": period["utc_end"],
+        "search": (search or channel_order_id),
     }
 
     for name, value in optional_params.items():
         if value is not None:
             params[name] = value
 
-    return await get_api().async_get("/commerce/orders", params=params)
+    response = await get_api().async_get("/commerce/orders", params=params)
+    return {**response, "timezone": timezone_name, "period": period}
 
 
 async def get_orders_summary(
@@ -113,6 +101,7 @@ async def get_orders_summary(
     end_date: str | None = None,
     page: int | None = None,
     limit: int | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     orders_response = await get_orders(
         limit=limit if limit is not None else 10,
@@ -120,6 +109,7 @@ async def get_orders_summary(
         order_status=order_status,
         start_date=start_date,
         end_date=end_date,
+        timezone=timezone,
     )
     data = orders_response.get("data", {})
     orders = data.get("items", []) or []
@@ -147,11 +137,16 @@ async def get_orders_summary(
 
     return {
         "found": bool(orders),
-        "period": {"start_date": start_date, "end_date": end_date},
+        "period": {
+            "start_date": start_date,
+            "end_date": end_date,
+            **local_date_period(start_date, end_date, timezone),
+        },
+        "timezone": resolve_timezone(timezone)[0],
         "pagination": {
             "page": page if page is not None else 1,
             "limit": limit if limit is not None else 10,
-            "returned": len(orders),
+            "in_page": len(orders),
             "total": data.get("totalItems", data.get("total", len(orders))),
         },
         "total_orders": len(orders),
@@ -187,6 +182,7 @@ async def search_orders(
     warehouse_id: str | None = None,
     customer_id: str | None = None,
     channel_order_id: str | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     """Search orders using the existing PointNXT order-list endpoint.
 
@@ -208,11 +204,20 @@ async def search_orders(
         customer_email=customer_email,
         customer_phone=customer_phone,
         channel_order_id=channel_order_id,
+        timezone=timezone,
     )
     data = result.get("data", {})
     items = data.get("items", []) or []
+    if customer_email or customer_phone:
+        items = [
+            order
+            for order in items
+            if order_matches_contact(order, customer_email, customer_phone)
+        ]
     return {
         "found": bool(items),
+        "timezone": resolve_timezone(timezone)[0],
+        "period": local_date_period(start_date, end_date, timezone),
         "pagination": data.get("metadata", {}),
         "orders": [
             {
@@ -220,6 +225,7 @@ async def search_orders(
                 "order_number": order.get("orderNo"),
                 "channel_order_number": order.get("channelOrderNo"),
                 "order_date": order.get("orderDate"),
+                "order_date_local": local_timestamp(order.get("orderDate"), timezone),
                 "status": order.get("orderStatus"),
                 "customer": order.get("customer"),
                 "total": order.get("grandTotal", order.get("orderTotal")),
@@ -230,38 +236,113 @@ async def search_orders(
     }
 
 
-def _compact_order(order: dict[str, Any]) -> dict[str, Any]:
-    """Keep detailed order responses useful to an LLM without losing fields."""
-    return {
+def _without_none(values: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def _non_zero(value: Any) -> bool:
+    return value is not None and value != 0
+
+
+def _compact_order(order: dict[str, Any], timezone_name: str | None = None) -> dict[str, Any]:
+    """Shape one order into the support-focused response used by ``get_order``."""
+    customer = order.get("customer") or {}
+    address = order.get("shippingAddress") or order.get("billingAddress") or {}
+    first_name = customer.get("firstName") or address.get("firstName")
+    last_name = customer.get("lastName") or address.get("lastName")
+    customer_name = customer.get("name") or " ".join(
+        part for part in (first_name, last_name) if part
+    )
+
+    compact_items = []
+    for item in order.get("orderItems", []) or []:
+        compact_items.append(
+            _without_none({
+                "name": item.get("name"),
+                "sku": item.get("sku") or item.get("code") or item.get("channelSku"),
+                "quantity_ordered": item.get("quantityOrdered"),
+                "quantity_shipped": item.get("quantityShipped"),
+                "quantity_returned": item.get("quantityReturned"),
+                "item_status": item.get("itemStatus") or item.get("status"),
+                "unit_price": item.get("unitPrice") or item.get("price"),
+                "line_total": item.get("lineTotal") or item.get("totalPrice"),
+                **{
+                    key: value
+                    for key, value in {
+                        "tax": item.get("taxAmount", item.get("tax")),
+                        "discount": item.get("discountAmount", item.get("discount")),
+                        "shipping": item.get("shippingAmount", item.get("shipping")),
+                        "cod_fee": item.get("codFee", item.get("codAmount")),
+                        "gift_wrap": item.get("giftWrapAmount", item.get("giftWrapFee")),
+                    }.items()
+                    if _non_zero(value)
+                },
+            })
+        )
+
+    compact_shipments = []
+    for shipment in order.get("shipments", []) or []:
+        shipment_values = {
+            "awb_no": shipment.get("awbNo") or shipment.get("awb"),
+            "ship_status": shipment.get("shipStatus"),
+            "piece_count": shipment.get("pieceCount"),
+            "weight_grams": shipment.get("weightGrams"),
+            "cod_collectable_amount": shipment.get("codCollectableAmount"),
+            "is_return": shipment.get("isReturn"),
+            "created_at": shipment.get("createdAt"),
+            # A null delivered_at is meaningful: it means not delivered yet.
+            "delivered_at": shipment.get("deliveredAt"),
+        }
+        compact_shipments.append(
+            {
+                key: value
+                for key, value in shipment_values.items()
+                if value is not None or key == "delivered_at"
+            }
+        )
+
+    warehouse = order.get("warehouse") or {}
+    compact = {
         "id": order.get("id"),
         "order_number": order.get("orderNo"),
         "channel_order_number": order.get("channelOrderNo"),
         "order_date": order.get("orderDate"),
+        "order_date_local": local_timestamp(order.get("orderDate"), timezone_name),
         "status": order.get("orderStatus"),
-        "customer": order.get("customer"),
-        "items": order.get("orderItems", []),
-        "payment": {
+        "customer": _without_none({
+            "id": customer.get("id") or order.get("customerId"),
+            "name": customer_name or None,
+            "email": customer.get("email") or address.get("email"),
+            "phone": customer.get("phone") or address.get("phone"),
+            "state": customer.get("state") or address.get("state"),
+        }),
+        "items": compact_items,
+        "payment": _without_none({
             "method": order.get("paymentMethod"),
             "total": order.get("grandTotal", order.get("orderTotal")),
             "paid": order.get("paidAmount"),
             "refunded": order.get("refundAmount"),
             "currency": order.get("currency"),
-        },
-        "fulfillment": {
-            "channel_status": order.get("channelOrderStatus"),
-            "warehouse": order.get("warehouse"),
-            "shipments": order.get("shipments", []),
+        }),
+        "fulfillment": _without_none({
+            "warehouse": _without_none({
+                "id": warehouse.get("id"),
+                "code": warehouse.get("code"),
+                "name": warehouse.get("name"),
+            }),
             "address_validation_status": order.get("addressValidationStatus"),
-        },
-        "returns": {
+        }),
+        "shipments": compact_shipments,
+        "returns": _without_none({
             "returned_at": order.get("returnedAt"),
             "return_reason": order.get("returnReason"),
-        },
+        }),
     }
+    return _without_none(compact)
 
 
 async def get_order(order_reference: str) -> dict[str, Any]:
-    """Retrieve a detailed order by internal ID or display/reference number."""
+    """Retrieve compact support-focused details by order ID or display/reference number."""
     if not isinstance(order_reference, str) or not order_reference.strip():
         raise ValueError("order_reference must be a non-empty string")
 

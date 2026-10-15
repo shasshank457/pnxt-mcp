@@ -34,8 +34,9 @@ async def main() -> None:
 
         context = await get_customer_context(customer_id="c1")
         assert context["customer"]["id"] == "c1"
-        assert context["statistics"]["order_value_returned"] == 750
-        assert get_orders.await_count == 3
+        assert context["statistics"]["order_value_in_page"] == 750
+        assert context["statistics"]["total_order_value"] == 750
+        assert get_orders.await_count == 4
 
     ambiguous = {
         "data": {

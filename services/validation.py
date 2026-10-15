@@ -29,6 +29,8 @@ def optional_id(value: str | None, name: str) -> None:
 def optional_date(value: str | None, name: str) -> None:
     optional_text(value, name)
     if value is not None:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError(f"{name} must use YYYY-MM-DD format")
         try:
             datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError as error:

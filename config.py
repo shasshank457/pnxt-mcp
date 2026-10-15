@@ -45,6 +45,7 @@ MCP_SESSION_ENCRYPTION_REQUIRED = os.getenv(
 # value deliberately trusts no forwarded headers; deployments behind TLS
 # proxies must configure this explicitly.
 MCP_FORWARDED_ALLOW_IPS = os.getenv("MCP_FORWARDED_ALLOW_IPS", "")
+DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
 
 
 def validate_mcp_oauth_configuration() -> None:

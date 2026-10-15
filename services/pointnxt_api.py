@@ -22,6 +22,9 @@ from services.metrics import record_request
 from services.request_context import get_request_key
 
 logger = logging.getLogger(__name__)
+_HEALTH_ENDPOINT = "/commerce/orders/stats"
+_HEALTH_TIMEOUT_SECONDS = 5
+_DEGRADED_LATENCY_MS = 2000
 
 
 def _safe_params(params: dict | None) -> dict:
@@ -93,32 +96,68 @@ class PointNXTAPI:
     def check_backend_health(self) -> dict:
         """Check whether the configured PointNXT backend is reachable."""
         started_at = perf_counter()
+        endpoint = _HEALTH_ENDPOINT
         try:
+            self._apply_auth()
             response = requests.get(
-                self.base_url,
-                headers={"Content-Type": "application/json"},
-                timeout=10,
+                f"{self.base_url}{endpoint}",
+                headers=self.headers,
+                timeout=_HEALTH_TIMEOUT_SECONDS,
             )
             latency_ms = round((perf_counter() - started_at) * 1000, 2)
+            status_code = response.status_code
+            if not isinstance(status_code, int) or not 100 <= status_code <= 599:
+                return {
+                    "status": "unhealthy",
+                    "reachable": True,
+                    "http_status": None,
+                    "latency_ms": latency_ms,
+                    "error": f"Invalid response from {endpoint}",
+                    "endpoint": endpoint,
+                }
+            if not 200 <= status_code < 300:
+                return {
+                    "status": "unhealthy",
+                    "reachable": True,
+                    "http_status": status_code,
+                    "latency_ms": latency_ms,
+                    "error": f"HTTP {status_code} from {endpoint}",
+                    "endpoint": endpoint,
+                }
             return {
-                "status": "healthy",
+                "status": "degraded" if latency_ms > _DEGRADED_LATENCY_MS else "healthy",
                 "reachable": True,
-                "http_status": response.status_code,
+                "http_status": status_code,
                 "latency_ms": latency_ms,
+                "error": None,
+                "endpoint": endpoint,
             }
         except requests.Timeout:
             return {
                 "status": "unhealthy",
                 "reachable": False,
-                "error": "Backend health check timed out",
+                "http_status": None,
                 "latency_ms": round((perf_counter() - started_at) * 1000, 2),
+                "error": f"timeout after {_HEALTH_TIMEOUT_SECONDS}s",
+                "endpoint": endpoint,
             }
-        except requests.RequestException as error:
+        except requests.RequestException:
             return {
                 "status": "unhealthy",
                 "reachable": False,
-                "error": f"Backend is unreachable: {error}",
+                "http_status": None,
                 "latency_ms": round((perf_counter() - started_at) * 1000, 2),
+                "error": "connection error",
+                "endpoint": endpoint,
+            }
+        except RuntimeError:
+            return {
+                "status": "unhealthy",
+                "reachable": False,
+                "http_status": None,
+                "latency_ms": round((perf_counter() - started_at) * 1000, 2),
+                "error": "PointNXT authentication is unavailable",
+                "endpoint": endpoint,
             }
 
     def check_authentication(self) -> dict:
