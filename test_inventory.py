@@ -104,6 +104,43 @@ async def test_product_inventory_sums_multiple_warehouses_and_unmanaged_products
 
 
 @pytest.mark.asyncio
+async def test_product_list_falls_back_to_detail_inventory_without_crashing():
+    listed = {
+        "id": "p-real",
+        "sku": "TFK356507408",
+        "name": "84K",
+        "status": "ACTIVE",
+    }
+    detail = {
+        "id": "p-real",
+        "sku": "TFK356507408",
+        "stocks": [
+            {"warehouse": None, "warehouseCode": "OSW", "quantityOnHand": "99", "quantityAvailable": "90", "quantityReserved": "9"},
+            None,
+            {"warehouse": "OSW", "quantityOnHand": None},
+        ],
+    }
+    api = AsyncMock()
+    api.async_get.side_effect = [
+        {"data": {"items": [listed], "metadata": {"totalItems": 1}}},
+        {"data": detail},
+    ]
+    with patch("tools.products.get_api", return_value=api):
+        result = await search_products(sku="TFK356507408", limit=3)
+
+    assert result["products"][0]["inventory"]["on_hand"] == 99
+    assert result["products"][0]["inventory"]["by_warehouse"][0]["warehouse_code"] == "OSW"
+
+
+def test_missing_inventory_is_unknown_not_unmanaged():
+    from tools.products import _compact_product
+
+    result = _compact_product({"id": "unknown", "sku": "SCX9857"})
+    assert result["inventory"] is None
+    assert "unknown" in result["inventory_note"]
+
+
+@pytest.mark.asyncio
 async def test_product_summary_has_count_basis():
     with patch("tools.products.get_api") as get_api:
         get_api.return_value.async_get = AsyncMock(return_value={"data": {"total": 244}})

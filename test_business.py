@@ -40,13 +40,59 @@ async def test_attention_queue_uses_combined_return_total():
          patch("tools.business.get_fulfillment_queue", new=AsyncMock(return_value={"orders": []})), \
          patch("tools.business.search_shipments", new=AsyncMock(return_value={"shipments": []})), \
          patch("tools.business.search_returns", new=AsyncMock(return_value={
-             "returns": [{"return_id": "one"}],
+             "returns": [{"order_number": "1000000001"}],
              "pagination": {"totalItems": 15},
          })):
         queue = await get_attention_queue("2026-09-30")
 
     returns = next(item for item in queue["items"] if item["category"] == "returns")
     assert returns["evidence"]["count"] == 15
+    assert returns["evidence"]["returns"] == ["1000000001"]
+    assert all(value is not None for value in returns["evidence"]["returns"])
+
+
+@pytest.mark.asyncio
+async def test_attention_queue_shipment_follow_up_uses_order_date_fallback():
+    shipments = {
+        "shipments": [
+            {
+                "order_number": "1000000657",
+                "order_status": "CONFIRMED",
+                "order_date": "2026-10-09T00:00:00Z",
+                "shipments": [{"id": "s1", "shipStatus": "CREATED", "awbNo": None}],
+            },
+            {
+                "order_number": "1000000001",
+                "order_status": "CONFIRMED",
+                "order_date": "2026-10-06T00:00:00Z",
+                "shipments": [{"id": "s2", "shipStatus": "CREATED", "awbNo": None}],
+            },
+            {
+                "order_number": "delivered",
+                "order_status": "CONFIRMED",
+                "order_date": "2026-10-01T00:00:00Z",
+                "shipments": [{"shipStatus": "DELIVERED"}],
+            },
+        ],
+        "pagination": {"totalItems": 3},
+    }
+    with patch("tools.business.search_shipments", new=AsyncMock(return_value=shipments)):
+        result = await _shipment_follow_up()
+    assert [item["order_number"] for item in result["items"]] == [
+        "1000000657",
+        "1000000001",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_attention_queue_includes_empty_shipment_follow_up_category():
+    with patch("tools.business.get_orders", new=AsyncMock(return_value={"data": {"items": []}})), \
+         patch("tools.business.get_fulfillment_queue", new=AsyncMock(return_value={"orders": []})), \
+         patch("tools.business.search_shipments", new=AsyncMock(return_value={"shipments": []})), \
+         patch("tools.business.search_returns", new=AsyncMock(return_value={"returns": []})):
+        queue = await get_attention_queue("2026-09-30")
+    shipment = next(item for item in queue["items"] if item["category"] == "shipment_follow_up")
+    assert shipment["evidence"]["total_count"] == 0
 
 
 @pytest.mark.asyncio

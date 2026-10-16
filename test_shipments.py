@@ -88,6 +88,19 @@ async def test_search_shipments_filters_by_ship_status_and_paginates():
 
 
 @pytest.mark.asyncio
+async def test_search_shipments_accepts_created_status():
+    response = {
+        "data": {
+            "items": [_shipped_order("created", "CREATED")],
+            "metadata": {"totalItems": 1},
+        }
+    }
+    with patch("tools.shipments.get_orders", new=AsyncMock(return_value=response)):
+        result = await search_shipments(ship_status="CREATED")
+    assert result["shipments"][0]["order_number"] == "created"
+
+
+@pytest.mark.asyncio
 async def test_search_shipments_scan_cap_marks_total_partial():
     response = {
         "data": {

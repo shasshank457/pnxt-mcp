@@ -3,7 +3,6 @@ from typing import Any
 from services.customer_matching import (
     normalize_email,
     normalize_phone,
-    order_matches_contact,
 )
 from services.pointnxt_api import PointNXTAPI
 from services.timezone import local_date_period, local_timestamp, resolve_timezone
@@ -39,7 +38,7 @@ def _validate_order_filters(
         normalized_status = order_status.upper()
         if normalized_status not in SUPPORTED_ORDER_STATUSES:
             raise ValueError(
-                f"order_status must be one of: "
+                f"Invalid order_status {order_status!r}. Valid values: "
                 f"{', '.join(sorted(SUPPORTED_ORDER_STATUSES))}"
             )
 
@@ -189,36 +188,54 @@ async def search_orders(
     PointNXT exposes one combined order search parameter, so customer_name is
     passed through the same backend search field as the other text searches.
     """
-    result = await get_orders(
-        limit=limit,
-        page=page,
-        order_status=order_status,
-        payment_method=payment_method,
-        channel_id=channel_id,
-        seller_id=seller_id,
-        warehouse_id=warehouse_id,
-        customer_id=customer_id,
-        start_date=start_date,
-        end_date=end_date,
-        order_no=order_reference or customer_name,
-        customer_email=customer_email,
-        customer_phone=customer_phone,
-        channel_order_id=channel_order_id,
-        timezone=timezone,
-    )
+    if customer_email or customer_phone:
+        from tools.customers import orders_for_contact
+
+        result = await orders_for_contact(
+            customer_email,
+            customer_phone,
+            limit,
+            page,
+            order_status=order_status,
+            payment_method=payment_method,
+            channel_id=channel_id,
+            seller_id=seller_id,
+            warehouse_id=warehouse_id,
+            start_date=start_date,
+            end_date=end_date,
+            channel_order_id=channel_order_id,
+            timezone=timezone,
+        )
+    else:
+        result = await get_orders(
+            limit=limit,
+            page=page,
+            order_status=order_status,
+            payment_method=payment_method,
+            channel_id=channel_id,
+            seller_id=seller_id,
+            warehouse_id=warehouse_id,
+            customer_id=customer_id,
+            start_date=start_date,
+            end_date=end_date,
+            order_no=order_reference or customer_name,
+            customer_email=customer_email,
+            customer_phone=customer_phone,
+            channel_order_id=channel_order_id,
+            timezone=timezone,
+        )
     data = result.get("data", {})
     items = data.get("items", []) or []
-    if customer_email or customer_phone:
-        items = [
-            order
-            for order in items
-            if order_matches_contact(order, customer_email, customer_phone)
-        ]
     return {
         "found": bool(items),
         "timezone": resolve_timezone(timezone)[0],
         "period": local_date_period(start_date, end_date, timezone),
         "pagination": data.get("metadata", {}),
+        **{
+            key: result[key]
+            for key in ("results_are_partial", "note")
+            if key in result
+        },
         "orders": [
             {
                 "id": order.get("id"),

@@ -79,13 +79,18 @@ def _shipment_date(order: dict[str, Any]) -> str:
 
 
 def _undelivered_shipment(order: dict[str, Any], now: datetime) -> bool:
-    if order.get("order_status") == "PENDING":
+    if str(order.get("order_status") or "").upper() == "PENDING":
         return False
     return any(
-        shipment.get("deliveredAt") in (None, "")
+        not shipment.get("deliveredAt")
         and str(shipment.get("shipStatus") or "").upper() != "DELIVERED"
         and _shipment_is_older_than(
-            shipment.get("createdAt"), now, SHIPMENT_FOLLOW_UP_MIN_AGE_DAYS
+            shipment.get("createdAt")
+            or order.get("order_date")
+            or order.get("orderDate")
+            or order.get("createdAt"),
+            now,
+            SHIPMENT_FOLLOW_UP_MIN_AGE_DAYS,
         )
         for shipment in order.get("shipments", []) or []
     )
@@ -221,7 +226,7 @@ async def get_attention_queue(
         })
     shipment_result = sections.get("shipments") or {}
     shipment_items = shipment_result.get("items", [])
-    if shipment_items:
+    if "shipments" in sections:
         items.append({
             "category": "shipment_follow_up",
             "reason": "Orders have stored shipments that are not marked delivered; pending fulfillment orders are excluded.",
@@ -251,9 +256,10 @@ async def get_attention_queue(
                 "is_sample": return_count > min(len(return_items), 10),
                 "total_count_is_partial": False,
                 "returns": [
-                    r.get("return_id")
-                    for r in sorted(return_items, key=_record_date)[:10]
-                ],
+                    r.get("order_number")
+                    for r in sorted(return_items, key=_record_date)
+                    if r.get("order_number")
+                ][:10],
             },
         })
     return {

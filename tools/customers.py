@@ -1,5 +1,6 @@
 """Customer-focused views built from the existing PointNXT orders service."""
 
+import time
 from typing import Any
 
 from services.customer_matching import (
@@ -13,6 +14,11 @@ from tools.orders import get_orders
 from tools.status_options import RETURN_STATUSES
 
 CUSTOMER_HISTORY_MAX_PAGES = 10
+CUSTOMER_SCAN_PAGE_SIZE = 100
+CUSTOMER_SCAN_MAX_PAGES = 10
+CUSTOMER_INDEX_TTL_SECONDS = 300
+
+_customer_index_cache: dict[str, Any] | None = None
 
 
 def _customer_from_order(order: dict[str, Any]) -> dict[str, Any]:
@@ -47,9 +53,149 @@ def _merge_customer(existing: dict[str, Any], incoming: dict[str, Any]) -> None:
     incoming_id = incoming.get("id")
     if incoming_id and incoming_id not in record_ids:
         record_ids.append(incoming_id)
+    for record_id in incoming.get("record_ids", []):
+        if record_id and record_id not in record_ids:
+            record_ids.append(record_id)
     for field in ("id", "name", "email", "phone"):
         if not existing.get(field) and incoming.get(field):
             existing[field] = incoming[field]
+
+
+def _clear_customer_index_cache() -> None:
+    """Clear the short-lived contact index, primarily for tests and lifecycle hooks."""
+    global _customer_index_cache
+    _customer_index_cache = None
+
+
+def _index_customer(index: dict[str, Any], customer: dict[str, Any]) -> None:
+    record_id = customer.get("id")
+    if not record_id:
+        return
+    for field, key in (
+        ("email", normalize_email(customer.get("email"))),
+        ("phone", normalize_phone(customer.get("phone"))),
+    ):
+        if not key:
+            continue
+        bucket = index[f"by_{field}"].setdefault(key, {})
+        existing = bucket.get(record_id)
+        if existing:
+            _merge_customer(existing, customer)
+        else:
+            bucket[record_id] = {**customer, "record_ids": [record_id]}
+
+
+async def _get_customer_index() -> dict[str, Any]:
+    global _customer_index_cache
+    now = time.monotonic()
+    if (
+        _customer_index_cache
+        and _customer_index_cache["expires_at"] > now
+    ):
+        return _customer_index_cache
+
+    index: dict[str, Any] = {
+        "by_email": {},
+        "by_phone": {},
+        "orders": [],
+        "partial": False,
+    }
+    for page in range(1, CUSTOMER_SCAN_MAX_PAGES + 1):
+        response = await get_orders(limit=CUSTOMER_SCAN_PAGE_SIZE, page=page)
+        data = response.get("data", {}) or {}
+        items = data.get("items", []) or []
+        metadata = data.get("metadata", {}) or {}
+        for order in items:
+            index["orders"].append(order)
+            _index_customer(index, _customer_from_order(order))
+
+        total = metadata.get("totalItems", metadata.get("total"))
+        scanned = page * CUSTOMER_SCAN_PAGE_SIZE
+        if not items or len(items) < CUSTOMER_SCAN_PAGE_SIZE or (
+            isinstance(total, int) and scanned >= total
+        ):
+            break
+        if page == CUSTOMER_SCAN_MAX_PAGES:
+            index["partial"] = True
+
+    index["expires_at"] = now + CUSTOMER_INDEX_TTL_SECONDS
+    _customer_index_cache = index
+    return index
+
+
+def _contact_index_matches(
+    index: dict[str, Any], email: str | None, phone: str | None
+) -> list[dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    if email:
+        records.update(index["by_email"].get(normalize_email(email), {}))
+    if phone:
+        records.update(index["by_phone"].get(normalize_phone(phone), {}))
+    candidates: list[dict[str, Any]] = []
+    for customer in records.values():
+        match = next(
+            (
+                candidate
+                for candidate in candidates
+                if _customer_identity_values(customer)
+                & _customer_identity_values(candidate)
+            ),
+            None,
+        )
+        if match:
+            _merge_customer(match, customer)
+        else:
+            candidates.append({**customer, "record_ids": [customer["id"]]})
+    return candidates
+
+
+async def orders_for_contact(
+    email: str | None,
+    phone: str | None,
+    limit: int,
+    page: int,
+    **filters: Any,
+) -> dict[str, Any]:
+    """Resolve a contact through the index, then fetch orders by customer ID."""
+    index = await _get_customer_index()
+    candidates = _contact_index_matches(index, email, phone)
+    record_ids = [
+        record_id
+        for candidate in candidates
+        for record_id in candidate.get("record_ids", [])
+        if record_id
+    ]
+    orders_by_id: dict[str, dict[str, Any]] = {}
+    for record_id in record_ids:
+        response = await get_orders(
+            limit=CUSTOMER_SCAN_PAGE_SIZE,
+            page=1,
+            customer_id=record_id,
+            **filters,
+        )
+        for order in (response.get("data", {}) or {}).get("items", []) or []:
+            orders_by_id[order.get("id") or f"{record_id}:{len(orders_by_id)}"] = order
+    if not record_ids:
+        for order in index["orders"]:
+            if order_matches_contact(order, email, phone):
+                orders_by_id[order.get("id") or f"scan:{len(orders_by_id)}"] = order
+    orders = list(orders_by_id.values())
+    start = (page - 1) * limit
+    page_items = orders[start : start + limit]
+    result: dict[str, Any] = {
+        "items": page_items,
+        "metadata": {
+            "page": page,
+            "limit": limit,
+            "totalItems": len(orders),
+        },
+    }
+    if index["partial"]:
+        result["results_are_partial"] = True
+        result["note"] = (
+            "Customer contact scan reached its maximum page limit; results may be incomplete."
+        )
+    return {"data": result}
 
 
 async def find_customers(
@@ -69,46 +215,71 @@ async def find_customers(
     optional_text(phone, "phone")
     optional_id(customer_id, "customer_id")
 
-    normalized_email = normalize_email(email)
-    normalized_phone = normalize_phone(phone)
-    response = await get_orders(
-        limit=limit,
-        page=page,
-        customer_id=customer_id,
-        customer_email=normalized_email or None,
-        customer_phone=normalized_phone or None,
-        order_no=name,
-    )
-    items = response.get("data", {}).get("items", []) or []
-    candidates: list[dict[str, Any]] = []
-    for order in items:
-        if (email or phone) and not order_matches_contact(
-            order, normalized_email, normalized_phone
-        ):
-            continue
-        customer = _customer_from_order(order)
-        identities = _customer_identity_values(customer)
-        match = next(
-            (
-                candidate
-                for candidate in candidates
-                if identities & _customer_identity_values(candidate)
-            ),
-            None,
+    contact_lookup = bool(email or phone)
+    if contact_lookup:
+        index = await _get_customer_index()
+        indexed_candidates = _contact_index_matches(index, email, phone)
+        response = {"data": {"metadata": {"page": page, "limit": limit}}}
+        candidates = indexed_candidates
+    else:
+        response = await get_orders(
+            limit=limit,
+            page=page,
+            customer_id=customer_id,
+            order_no=name,
         )
-        if match:
-            _merge_customer(match, customer)
-        elif identities:
-            customer["record_ids"] = [customer.get("id")] if customer.get("id") else []
-            candidates.append(customer)
+        items = response.get("data", {}).get("items", []) or []
+        candidates = []
+        for order in items:
+            customer = _customer_from_order(order)
+            identities = _customer_identity_values(customer)
+            match = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if identities & _customer_identity_values(candidate)
+                ),
+                None,
+            )
+            if match:
+                _merge_customer(match, customer)
+            elif identities:
+                customer["record_ids"] = [customer.get("id")] if customer.get("id") else []
+                candidates.append(customer)
+
+        if customer_id and candidates:
+            index = await _get_customer_index()
+            expanded = []
+            for candidate in candidates:
+                related = _contact_index_matches(
+                    index, candidate.get("email"), candidate.get("phone")
+                )
+                for related_customer in related:
+                    _merge_customer(candidate, related_customer)
+                expanded.append(candidate)
+            candidates = expanded
 
     results = candidates
+    partial = bool(contact_lookup and index["partial"]) if contact_lookup else False
+    if customer_id and candidates:
+        partial = bool(index["partial"])
+    pagination = response.get("data", {}).get("metadata", {})
+    if partial:
+        pagination = {**pagination, "results_are_partial": True}
     return {
         "found": bool(results),
         "ambiguous": len(results) > 1,
         "candidates": results,
-        "pagination": response.get("data", {}).get("metadata", {}),
+        "pagination": pagination,
         "message": None if results else "No matching customer found.",
+        **(
+            {
+                "results_are_partial": True,
+                "note": "Customer contact scan reached its maximum page limit; results may be incomplete.",
+            }
+            if partial
+            else {}
+        ),
     }
 
 

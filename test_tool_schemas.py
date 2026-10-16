@@ -35,6 +35,7 @@ def test_status_parameters_publish_shared_enum_values():
         "IN_TRANSIT",
         "SHIPPED",
         "DELIVERED",
+        "CREATED",
     ]
 
 
@@ -47,13 +48,13 @@ def test_every_tool_and_parameter_has_description():
 
 @pytest.mark.asyncio
 async def test_invalid_status_values_are_explicit():
-    with pytest.raises(ValueError, match="order_status must be one of"):
+    with pytest.raises(ValueError, match="Invalid order_status"):
         await get_orders(order_status="NOT_A_STATUS")
-    with pytest.raises(ValueError, match="return_status must be one of"):
+    with pytest.raises(ValueError, match="Invalid return_status"):
         await search_returns(return_status="NOT_A_STATUS")
-    with pytest.raises(ValueError, match="status must be one of"):
+    with pytest.raises(ValueError, match="Invalid status"):
         await get_products(status="NOT_A_STATUS")
-    with pytest.raises(ValueError, match="ship_status must be one of"):
+    with pytest.raises(ValueError, match="Invalid ship_status"):
         await search_shipments(ship_status="NOT_A_STATUS")
 
 

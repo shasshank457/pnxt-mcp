@@ -45,10 +45,13 @@ async def search_shipments(
     optional_id(channel_id, "channel_id")
     optional_text(ship_status, "ship_status")
     if ship_status is not None and ship_status.upper() not in SHIP_STATUSES:
-        raise ValueError(f"ship_status must be one of: {', '.join(SHIP_STATUSES)}")
+        raise ValueError(
+            f"Invalid ship_status {ship_status!r}. Valid values: {', '.join(SHIP_STATUSES)}"
+        )
     if order_status is not None and order_status.upper() not in SUPPORTED_ORDER_STATUSES:
         raise ValueError(
-            f"order_status must be one of: {', '.join(sorted(SUPPORTED_ORDER_STATUSES))}"
+            f"Invalid order_status {order_status!r}. Valid values: "
+            f"{', '.join(sorted(SUPPORTED_ORDER_STATUSES))}"
         )
     if include_without_shipments and ship_status is None:
         response = await get_orders(

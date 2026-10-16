@@ -117,7 +117,10 @@ async def search_returns(
         optional_text(return_status, "return_status")
         normalized = return_status.upper()
         if normalized not in RETURN_STATUSES:
-            raise ValueError(f"return_status must be one of: {', '.join(sorted(RETURN_STATUSES))}")
+            raise ValueError(
+                f"Invalid return_status {return_status!r}. Valid values: "
+                f"{', '.join(sorted(RETURN_STATUSES))}"
+            )
     if return_status is not None:
         response = await get_orders(
             limit=limit,

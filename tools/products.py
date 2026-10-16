@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from typing import Any
 
 from services.pointnxt_api import PointNXTAPI
@@ -8,6 +10,7 @@ PRODUCT_LIST_COUNT_BASIS = "Paginated products returned by /commerce/products."
 PRODUCT_SUMMARY_COUNT_BASIS = (
     "Backend aggregate product summary; its scope may differ from product-list pages."
 )
+logger = logging.getLogger(__name__)
 
 
 def get_api() -> PointNXTAPI:
@@ -39,7 +42,9 @@ async def get_products(
     if status is not None and (
         not isinstance(status, str) or status.upper() not in PRODUCT_STATUSES
     ):
-        raise ValueError(f"status must be one of: {', '.join(PRODUCT_STATUSES)}")
+        raise ValueError(
+            f"Invalid status {status!r}. Valid values: {', '.join(PRODUCT_STATUSES)}"
+        )
 
     params = {
         key: value
@@ -88,7 +93,7 @@ def _name(value: Any, *fallbacks: Any) -> str | None:
 
 
 def _stock_rows(product: dict[str, Any]) -> list[dict[str, Any]]:
-    raw = product.get("inventory") or product.get("stocks")
+    raw = product.get("stocks") if "stocks" in product else product.get("inventory")
     if isinstance(raw, dict):
         nested = raw.get("warehouses") or raw.get("items") or raw.get("stocks")
         if isinstance(nested, list):
@@ -101,27 +106,58 @@ def _stock_rows(product: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _compact_inventory(product: dict[str, Any]) -> dict[str, Any]:
+def _explicit_inventory_tracking(product: dict[str, Any]) -> bool | None:
+    inventory = product.get("inventory")
+    if isinstance(inventory, dict) and isinstance(inventory.get("tracked"), bool):
+        return inventory["tracked"]
+    for key in (
+        "inventoryTracked",
+        "trackInventory",
+        "inventoryManaged",
+        "isInventoryManaged",
+        "manageInventory",
+    ):
+        if isinstance(product.get(key), bool):
+            return product[key]
+    return None
+
+
+def _number(value: Any) -> int | float:
+    if isinstance(value, bool) or value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = float(value.strip())
+        except ValueError:
+            return 0
+        return int(parsed) if parsed.is_integer() else parsed
+    return 0
+
+
+def _compact_inventory(product: dict[str, Any]) -> dict[str, Any] | None:
     rows = _stock_rows(product)
-    raw_inventory = product.get("inventory")
-    if raw_inventory is not None and isinstance(raw_inventory, dict) and raw_inventory.get("tracked") is False:
+    tracking = _explicit_inventory_tracking(product)
+    if tracking is False:
         return {"tracked": False}
     if not rows:
-        return {"tracked": False}
+        return None
 
     warehouses: dict[str, dict[str, Any]] = {}
     on_hand = available = reserved = 0
     for row in rows:
-        warehouse = row.get("warehouse") or {}
+        warehouse = row.get("warehouse")
         code = (
             row.get("warehouseCode")
             or row.get("warehouse_code")
             or (warehouse.get("code") if isinstance(warehouse, dict) else None)
+            or row.get("warehouseId")
             or "unknown"
         )
-        row_on_hand = row.get("quantityOnHand", row.get("onHand", 0)) or 0
-        row_available = row.get("quantityAvailable", row.get("available", 0)) or 0
-        row_reserved = row.get("quantityReserved", row.get("reserved", 0)) or 0
+        row_on_hand = _number(row.get("quantityOnHand", row.get("onHand", 0)))
+        row_available = _number(row.get("quantityAvailable", row.get("available", 0)))
+        row_reserved = _number(row.get("quantityReserved", row.get("reserved", 0)))
         on_hand += row_on_hand
         available += row_available
         reserved += row_reserved
@@ -141,7 +177,8 @@ def _compact_inventory(product: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_product(product: dict[str, Any]) -> dict[str, Any]:
-    return {
+    inventory = _compact_inventory(product)
+    compact = {
         "id": product.get("id"),
         "sku": product.get("sku"),
         "name": product.get("name"),
@@ -150,8 +187,41 @@ def _compact_product(product: dict[str, Any]) -> dict[str, Any]:
         "brand": _name(product.get("brand"), product.get("brandName")),
         "category": _name(product.get("category"), product.get("categoryName")),
         "vendor": _name(product.get("vendor"), product.get("vendorName")),
-        "inventory": _compact_inventory(product),
+        "inventory": inventory,
     }
+    if inventory is None:
+        compact["inventory_note"] = (
+            "Inventory data was not included in this backend response; tracking status is unknown."
+        )
+    return compact
+
+
+async def _enrich_inventory(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill missing list inventory from the existing product-detail endpoint."""
+    candidates = [
+        product
+        for product in products
+        if product.get("id")
+        and _compact_inventory(product) is None
+        and _explicit_inventory_tracking(product) is not False
+    ]
+    if not candidates:
+        return products
+
+    async def fetch(product: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = await get_product_by_id(str(product["id"]))
+            detail = response.get("data", response)
+            return {**product, **detail} if isinstance(detail, dict) else product
+        except Exception:
+            logger.warning("Product inventory enrichment failed", exc_info=True)
+            return product
+
+    enriched_candidates = await asyncio.gather(
+        *(fetch(product) for product in candidates)
+    )
+    by_id = {product.get("id"): product for product in enriched_candidates}
+    return [by_id.get(product.get("id"), product) for product in products]
 
 
 async def search_products(
@@ -173,7 +243,9 @@ async def search_products(
     if status is not None and (
         not isinstance(status, str) or status.upper() not in PRODUCT_STATUSES
     ):
-        raise ValueError(f"status must be one of: {', '.join(PRODUCT_STATUSES)}")
+        raise ValueError(
+            f"Invalid status {status!r}. Valid values: {', '.join(PRODUCT_STATUSES)}"
+        )
     if product_id:
         response = await get_product_by_id(product_id)
         product = response.get("data", response)
@@ -185,6 +257,7 @@ async def search_products(
     )
     data = response.get("data", {})
     items = data.get("items", []) or []
+    items = await _enrich_inventory(items)
     return {
         "found": bool(items),
         "products": [_compact_product(product) for product in items],

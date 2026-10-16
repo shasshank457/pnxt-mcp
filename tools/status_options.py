@@ -28,5 +28,5 @@ RETURN_STATUSES = (
 )
 
 # These are the shipment statuses used by the API responses and repository fixtures.
-SHIP_STATUSES = ("READY_FOR_PICKUP", "IN_TRANSIT", "SHIPPED", "DELIVERED")
+SHIP_STATUSES = ("READY_FOR_PICKUP", "IN_TRANSIT", "SHIPPED", "DELIVERED", "CREATED")
 PRODUCT_STATUSES = ("ACTIVE", "DRAFT", "ARCHIVED")

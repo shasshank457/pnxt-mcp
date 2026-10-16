@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from services.customer_matching import normalize_email, normalize_phone
-from tools.customers import find_customers, get_customer_context
+from tools.customers import (
+    CUSTOMER_SCAN_MAX_PAGES,
+    _clear_customer_index_cache,
+    find_customers,
+    get_customer_context,
+)
 from tools.orders import get_orders, search_orders
 
 
@@ -17,6 +22,13 @@ def _order(customer, order_id="order-1", total=100):
         "customer": customer,
         "orderItems": [],
     }
+
+
+@pytest.fixture(autouse=True)
+def clear_customer_index():
+    _clear_customer_index_cache()
+    yield
+    _clear_customer_index_cache()
 
 
 def test_contact_normalization():
@@ -78,16 +90,114 @@ async def test_search_orders_filters_normalized_email_results():
     response = {
         "data": {
             "items": [
-                _order({"email": "vilas@adaptnxt.com"}),
-                _order({"email": "other@example.com"}, order_id="order-2"),
+                _order({"id": "record-1", "email": "vilas@adaptnxt.com"}),
+                _order({"id": "record-2", "email": "other@example.com"}, order_id="order-2"),
             ],
             "metadata": {"totalItems": 2},
         }
     }
-    with patch("tools.orders.get_orders", new=AsyncMock(return_value=response)):
+    async def fetch(**kwargs):
+        if kwargs.get("customer_id") == "record-1":
+            return {"data": {"items": [response["data"]["items"][0]], "metadata": {"totalItems": 1}}}
+        return response
+
+    with patch("tools.customers.get_orders", new=AsyncMock(side_effect=fetch)):
         result = await search_orders(customer_email=" VILAS@ADAPTNXT.COM ")
     assert result["found"] is True
     assert [order["id"] for order in result["orders"]] == ["order-1"]
+
+
+@pytest.mark.asyncio
+async def test_contact_lookup_scans_when_backend_search_returns_nothing():
+    response = {
+        "data": {
+            "items": [
+                _order(
+                    {
+                        "id": "record-1",
+                        "name": "Vilas Katigar",
+                        "email": "vilas@adaptnxt.com",
+                        "phone": "+919380027066",
+                    }
+                ),
+                _order(
+                    {
+                        "id": "record-2",
+                        "name": "Vilas Katigar",
+                        "email": "VILAS@ADAPTNXT.COM",
+                        "phone": "9380027066",
+                    },
+                    order_id="order-2",
+                ),
+            ],
+            "metadata": {"totalItems": 2},
+        }
+    }
+    with patch("tools.customers.get_orders", new=AsyncMock(return_value=response)):
+        result = await find_customers(email=" VILAS@ADAPTNXT.COM ")
+    assert result["candidates"][0]["record_ids"] == ["record-1", "record-2"]
+
+
+@pytest.mark.asyncio
+async def test_phone_formats_find_both_duplicate_records():
+    response = {
+        "data": {
+            "items": [
+                _order({"id": "record-1", "phone": "+919380027066"}),
+                _order({"id": "record-2", "phone": "9380027066"}, "order-2"),
+            ],
+            "metadata": {"totalItems": 2},
+        }
+    }
+    with patch("tools.customers.get_orders", new=AsyncMock(return_value=response)):
+        for phone in ("+919380027066", "919380027066", "9380027066"):
+            result = await find_customers(phone=phone)
+            assert result["candidates"][0]["record_ids"] == ["record-1", "record-2"]
+
+
+@pytest.mark.asyncio
+async def test_customer_index_cache_avoids_second_scan():
+    response = {"data": {"items": [_order({"id": "record-1", "email": "a@example.com"})]}}
+    fetch = AsyncMock(return_value=response)
+    with patch("tools.customers.get_orders", new=fetch):
+        await find_customers(email="a@example.com")
+        await find_customers(email="a@example.com")
+    assert fetch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_customer_scan_cap_marks_partial_results():
+    page = {
+        "data": {
+            "items": [_order({"id": "record-1", "email": "a@example.com"})] * 100,
+            "metadata": {"totalItems": CUSTOMER_SCAN_MAX_PAGES * 100 + 1},
+        }
+    }
+    with patch("tools.customers.get_orders", new=AsyncMock(return_value=page)):
+        result = await find_customers(email="a@example.com")
+    assert result["results_are_partial"] is True
+    assert "maximum page limit" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_customer_id_lookup_expands_duplicate_records_from_index():
+    first = _order(
+        {"id": "record-1", "email": "vilas@adaptnxt.com", "phone": "+919380027066"}
+    )
+    scan = {
+        "data": {
+            "items": [
+                first,
+                _order(
+                    {"id": "record-2", "email": "VILAS@ADAPTNXT.COM", "phone": "9380027066"},
+                    "order-2",
+                ),
+            ]
+        }
+    }
+    with patch("tools.customers.get_orders", new=AsyncMock(side_effect=[first | {"data": {"items": [first]}}, scan])):
+        result = await find_customers(customer_id="record-1")
+    assert result["candidates"][0]["record_ids"] == ["record-1", "record-2"]
 
 
 @pytest.mark.asyncio

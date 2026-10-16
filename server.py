@@ -1,6 +1,10 @@
+import inspect
+import logging
+from functools import wraps
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
@@ -158,6 +162,7 @@ Flag = Annotated[bool, Field(description="Whether to include the broader result 
 
 # Global MCP server object
 mcp = MCPServer("PointNXT MCP", middleware=[MCPSessionMiddleware()])
+logger = logging.getLogger(__name__)
 register_prompts(mcp)
 
 
@@ -465,7 +470,7 @@ async def search_shipments(
     include_without_shipments: Flag = False,
     ship_status: ShipStatus = None,
 ):
-    """Find orders with stored shipments by default and return shipment/tracking summaries. Use this instead of search_orders for shipment questions; set include_without_shipments only when auditing all orders, or use ship_status READY_FOR_PICKUP, IN_TRANSIT, SHIPPED, or DELIVERED. Results are read-only, tracking is not refreshed live, and scan-cap totals may be partial."""
+    """Find orders with stored shipments by default and return shipment/tracking summaries. Use this instead of search_orders for shipment questions; set include_without_shipments only when auditing all orders, or use ship_status READY_FOR_PICKUP, IN_TRANSIT, SHIPPED, DELIVERED, or CREATED. Results are read-only, tracking is not refreshed live, and scan-cap totals may be partial."""
     return await find_shipments(**locals())
 
 
@@ -544,6 +549,40 @@ def check_configuration():
 def get_mcp_metrics():
     """Return local in-process MCP request and backend performance metrics. Use this for operational diagnostics rather than customer or order data. Metrics contain aggregates and do not expose access or refresh tokens."""
     return get_metrics()
+
+
+def _install_tool_error_boundary() -> None:
+    """Expose safe validation/crash messages while logging unexpected tracebacks."""
+    for tool in mcp._tool_manager.list_tools():
+        original = tool.fn
+        if inspect.iscoroutinefunction(original):
+
+            @wraps(original)
+            async def wrapped(*args, _original=original, _name=tool.name, **kwargs):
+                try:
+                    return await _original(*args, **kwargs)
+                except ValueError as error:
+                    raise ToolError(f"Invalid input for {_name}: {error}") from error
+                except Exception as error:
+                    logger.exception("Tool %s raised an unexpected exception", _name)
+                    raise ToolError(f"{_name} failed ({type(error).__name__})") from error
+
+        else:
+
+            @wraps(original)
+            def wrapped(*args, _original=original, _name=tool.name, **kwargs):
+                try:
+                    return _original(*args, **kwargs)
+                except ValueError as error:
+                    raise ToolError(f"Invalid input for {_name}: {error}") from error
+                except Exception as error:
+                    logger.exception("Tool %s raised an unexpected exception", _name)
+                    raise ToolError(f"{_name} failed ({type(error).__name__})") from error
+
+        tool.fn = wrapped
+
+
+_install_tool_error_boundary()
 
 
 if __name__ == "__main__":
