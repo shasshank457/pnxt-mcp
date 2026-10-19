@@ -1,4 +1,5 @@
-"""Bind each MCP request to its transport connection session."""
+"""Authenticate MCP requests against their durable PointNXT session."""
+import hashlib
 import logging
 from typing import Any
 
@@ -54,24 +55,34 @@ class MCPSessionMiddleware(ServerMiddleware[Any]):
                 return result
             finally:
                 _log_completion(method, result)
-        # A missing HTTP identity must fail closed.  Only an actual non-HTTP
-        # stdio request may use the process-local stdio identity.
+        # Stateless HTTP connections may not have a transport session ID. Use
+        # a token-derived request key in that case; the token itself remains
+        # validated against the durable PointNXT session below.
         if request is not None:
-            if not isinstance(session_id, str) or not session_id.strip():
+            authorization = request_headers.get("authorization", "")
+            if authorization.lower().startswith("bearer "):
+                bearer = authorization[7:].strip()
+                key = (
+                    session_id.strip()
+                    if isinstance(session_id, str) and session_id.strip()
+                    else f"mcp-token:{hashlib.sha256(bearer.encode()).hexdigest()}"
+                )
+            elif isinstance(session_id, str) and session_id.strip():
+                key = session_id.strip()
+            else:
                 _log_completion(method, None)
                 raise StructuredToolError(
                     "AUTH_REQUIRED", "No stable MCP session identity is available"
                 )
-            key = session_id.strip()
         else:
             key = session_id or "stdio"
-        if request is not None:
-            authorization = request_headers.get("authorization", "")
-            if authorization.lower().startswith("bearer ") and not validate_bearer(
-                authorization[7:].strip(), str(key)
-            ):
-                _log_completion(method, None)
-                raise StructuredToolError("AUTH_REQUIRED", "Invalid MCP access token")
+        if (
+            request is not None
+            and authorization.lower().startswith("bearer ")
+            and not validate_bearer(authorization[7:].strip(), str(key))
+        ):
+            _log_completion(method, None)
+            raise StructuredToolError("AUTH_REQUIRED", "Invalid MCP access token")
         token = set_request_key(str(key))
         result = None
         try:

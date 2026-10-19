@@ -421,7 +421,7 @@ async def token(request):
         expires_at = time.time() + MCP_OAUTH_TOKEN_TTL
         session_store.put_mcp_token(
             _hash(access_token),
-            {"auth_session_key": record["auth_session_key"], "scope": record["scope"], "resource": resource, "user_id": session.user_id, "tenant_id": session.tenant_id, "membership_id": session.membership_id},
+            {"auth_session_key": record["auth_session_key"], "client_id": record["client_id"], "scope": record["scope"], "resource": resource, "user_id": session.user_id, "tenant_id": session.tenant_id, "membership_id": session.membership_id},
             expires_at,
         )
         session_store.put_mcp_refresh_token(
@@ -457,7 +457,7 @@ async def token(request):
     access_token = secrets.token_urlsafe(48)
     refresh_token = secrets.token_urlsafe(48)
     expires_at = time.time() + MCP_OAUTH_TOKEN_TTL
-    session_store.put_mcp_token(_hash(access_token), {"auth_session_key": record["auth_session_key"], "scope": record["scope"], "resource": resource, "user_id": record["user_id"], "tenant_id": record["tenant_id"], "membership_id": record["membership_id"]}, expires_at)
+    session_store.put_mcp_token(_hash(access_token), {"auth_session_key": record["auth_session_key"], "client_id": record["client_id"], "scope": record["scope"], "resource": resource, "user_id": record["user_id"], "tenant_id": record["tenant_id"], "membership_id": record["membership_id"]}, expires_at)
     session_store.put_mcp_refresh_token(_hash(refresh_token), {"auth_session_key": record["auth_session_key"], "client_id": client_id, "scope": record["scope"], "resource": resource, "user_id": record["user_id"], "tenant_id": record["tenant_id"], "membership_id": record["membership_id"]}, time.time() + MCP_REFRESH_TOKEN_TTL)
     return JSONResponse({"access_token": access_token, "refresh_token": refresh_token, "token_type": "Bearer", "expires_in": MCP_OAUTH_TOKEN_TTL, "scope": record["scope"]})
 
@@ -473,7 +473,7 @@ async def revoke(request):
 
 def validate_bearer(token: str, session_key: str) -> bool:
     token_fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
-    record = session_store.bind_mcp_token(_hash(token), session_key)
+    record = session_store.get_mcp_token(_hash(token))
     if not record:
         logger.warning(
             "MCP bearer rejected reason=missing_expired_revoked_or_bound_to_other_session "
@@ -490,6 +490,7 @@ def validate_bearer(token: str, session_key: str) -> bool:
         )
         return False
     checks = {
+        "client": bool(record.get("client_id")),
         "resource": _resource_matches(record.get("resource", "")),
         "user": durable.user_id == record["user_id"],
         "tenant": durable.tenant_id == record["tenant_id"],
@@ -499,8 +500,9 @@ def validate_bearer(token: str, session_key: str) -> bool:
     if not all(checks.values()):
         logger.warning(
             "MCP bearer rejected reason=session_claim_mismatch token_fingerprint=%s "
-            "resource=%s user=%s tenant=%s membership=%s authenticated=%s",
+            "client=%s resource=%s user=%s tenant=%s membership=%s authenticated=%s",
             token_fingerprint,
+            checks["client"],
             checks["resource"],
             checks["user"],
             checks["tenant"],
@@ -513,7 +515,7 @@ def validate_bearer(token: str, session_key: str) -> bool:
 
 
 def validate_bearer_credential(token: str) -> bool:
-    """Validate an MCP bearer token before transport-session binding."""
+    """Validate an MCP bearer token before MCP dispatch."""
     record = session_store.get_mcp_token(_hash(token))
     if not record:
         return False
@@ -522,7 +524,8 @@ def validate_bearer_credential(token: str) -> bool:
         durable
         and all(
             (
-                record.get("resource") == MCP_RESOURCE,
+                bool(record.get("client_id")),
+                _resource_matches(record.get("resource", "")),
                 durable.user_id == record.get("user_id"),
                 durable.tenant_id == record.get("tenant_id"),
                 durable.membership_id == record.get("membership_id"),

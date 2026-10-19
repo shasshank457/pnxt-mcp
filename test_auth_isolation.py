@@ -154,6 +154,7 @@ async def main() -> None:
         _hash("mcp-token"),
         {
             "auth_session_key": "oauth:transaction",
+            "client_id": "test-client",
             "scope": "mcp",
             "resource": MCP_RESOURCE,
             "user_id": "user-oauth",
@@ -164,7 +165,7 @@ async def main() -> None:
     )
     reset_request_key(auth_key)
     assert validate_bearer("mcp-token", "transport-a")
-    assert not validate_bearer("mcp-token", "transport-b")
+    assert validate_bearer("mcp-token", "transport-b")
 
     clear_all_for_tests()
     print("Authentication isolation tests passed")

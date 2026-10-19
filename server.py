@@ -626,7 +626,7 @@ async def _run_http(host: str, port: int) -> None:
     app = MCPProtocolGate(
         mcp.streamable_http_app(
             streamable_http_path="/mcp",
-            stateless_http=False,
+            stateless_http=True,
             host=host,
         )
     )

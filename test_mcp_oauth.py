@@ -312,7 +312,7 @@ async def main() -> None:
     assert "pointnxt-access" not in access_token and "pointnxt-refresh" not in access_token
 
     assert mcp_oauth.validate_bearer(access_token, "transport-a")
-    assert not mcp_oauth.validate_bearer(access_token, "transport-b")
+    assert mcp_oauth.validate_bearer(access_token, "transport-b")
     assert not mcp_oauth.validate_bearer(access_token, "transport-a") is False
 
     # Identity mismatch and tenant/membership mismatch are rejected.

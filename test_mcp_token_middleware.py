@@ -91,8 +91,12 @@ async def test_issued_token_authenticates_initialize_and_tools_list(monkeypatch)
     async def call_next(ctx):
         return {"method": ctx.method, "ok": True}
 
-    for method in ("initialize", "tools/list"):
-        result = await middleware(_Context(method, token), call_next)
+    for method, session_id in (
+        ("initialize", "transport-a"),
+        ("initialize", "transport-b"),
+        ("tools/list", "transport-b"),
+    ):
+        result = await middleware(_Context(method, token, session_id), call_next)
         assert result == {"method": method, "ok": True}
 
 
