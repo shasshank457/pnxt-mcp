@@ -122,6 +122,7 @@ def validate_metadata(client_id: str, document: object) -> dict:
 
 async def _fetch_document(url: str) -> dict:
     current = validate_metadata_url(url)
+    metadata_host = (urlsplit(current).hostname or "").lower()
     timeout = httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=3.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         for _ in range(_MAX_REDIRECTS + 1):
@@ -132,6 +133,8 @@ async def _fetch_document(url: str) -> dict:
                     if not location:
                         raise ClientMetadataError("metadata redirect has no location")
                     current = validate_metadata_url(urljoin(current, location))
+                    if (urlsplit(current).hostname or "").lower() != metadata_host:
+                        raise ClientMetadataError("metadata redirect changed host")
                     continue
                 if response.status_code != 200:
                     raise ClientMetadataError("metadata document unavailable")

@@ -8,7 +8,11 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from config import MCP_FORWARDED_ALLOW_IPS, validate_mcp_oauth_configuration
+from config import (
+    MCP_FORWARDED_ALLOW_IPS,
+    validate_mcp_oauth_configuration,
+    validate_write_configuration,
+)
 from prompts import register_prompts
 from services import auth_bridge, session_store
 from services.mcp_oauth import (
@@ -32,6 +36,9 @@ from services.mcp_oauth import (
 from services.mcp_protocol_gate import MCPProtocolGate
 from services.mcp_session_middleware import MCPSessionMiddleware
 from services.metrics import get_metrics
+from services.response_safety import sanitize_public_response
+from services.tool_errors import StructuredToolError
+from services.write_tools import register_enabled_write_tools
 from tools.auth import auth_callback, auth_check
 from tools.auth import current_user as get_current_user
 from tools.business import (
@@ -263,7 +270,7 @@ async def get_orders(
 ):
     """Retrieve read-only PointNXT orders with pagination and optional filters.
     Use this for broad order lists; use search_orders for customer-oriented searches and get_order for one compact order. Dates are YYYY-MM-DD values interpreted in the selected IANA timezone (default Asia/Kolkata), status must be a listed enum, and limit is 1-100."""
-    return await fetch_orders(
+    response = await fetch_orders(
         limit=limit,
         page=page,
         order_status=order_status,
@@ -280,12 +287,13 @@ async def get_orders(
         channel_order_id=channel_order_id,
         timezone=timezone,
     )
+    return sanitize_public_response(response)
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_order_by_id(order_id: RequiredId):
-    """Retrieve the complete raw order record by its backend ID. Use get_order for normal support questions and this tool only when full internal detail is required. The response is read-only and may contain backend-specific fields."""
-    return await fetch_order_by_id(order_id)
+    """Retrieve the complete available order record by backend ID with internal configuration and personal data removed. Use get_order for normal support questions; use this tool only when backend-level detail is needed. The response remains read-only and backend-shaped."""
+    return sanitize_public_response(await fetch_order_by_id(order_id))
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
@@ -308,13 +316,13 @@ async def search_orders(
     timezone: Timezone = None,
 ):
     """Search orders and return compact summaries. Use this for customer, reference, status, or date searches; use get_orders for a general paginated list and get_order for one order. Name/reference matching follows the backend, email and phone are normalized, dates are YYYY-MM-DD in the selected timezone (default Asia/Kolkata), and limit is 1-100."""
-    return await find_orders(**locals())
+    return sanitize_public_response(await find_orders(**locals()))
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_order(order_reference: Reference):
     """Retrieve compact order details for normal support and operations questions. Use get_order_by_id only for the complete raw record, and use search_orders when the order reference is not known. The lookup accepts an order number or channel order number."""
-    return await fetch_order(order_reference)
+    return sanitize_public_response(await fetch_order(order_reference))
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
@@ -327,7 +335,7 @@ async def get_orders_summary(
     timezone: Timezone = None,
 ):
     """Summarize read-only orders for an optional YYYY-MM-DD date range. Use this for totals and status aggregates, not order details; use search_orders for matching records and get_order for one order. Dates use the selected IANA timezone (default Asia/Kolkata), status is an enum, and limit is 1-100."""
-    return await fetch_orders_summary(
+    response = await fetch_orders_summary(
         order_status=order_status,
         start_date=start_date,
         end_date=end_date,
@@ -335,6 +343,7 @@ async def get_orders_summary(
         page=page,
         limit=limit,
     )
+    return sanitize_public_response(response)
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
@@ -360,7 +369,9 @@ async def get_customer_context(
     page: Page = 1,
 ):
     """Get compact customer identity, paginated order history, and whole-history statistics. Use find_customer first when the customer ID is unknown; use search_orders for order-only questions. Customer contact filters are normalized, page is 1-based, and history totals may be marked partial at the scan cap."""
-    return await fetch_customer_context(customer_id, name, email, phone, limit, page)
+    return sanitize_public_response(
+        await fetch_customer_context(customer_id, name, email, phone, limit, page)
+    )
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
@@ -391,7 +402,7 @@ async def get_products(
     warehouse_id: Identifier = None,
 ):
     """Retrieve read-only catalog products with pagination and filters. Use this for a broad product list; use search_products for search and get_product for compact details of one product. SKU/barcode are exact backend filters, name follows backend search, status is ACTIVE, DRAFT, or ARCHIVED, and limit is 1-100."""
-    return await fetch_products(
+    response = await fetch_products(
         limit=limit,
         page=page,
         sku=sku,
@@ -405,12 +416,13 @@ async def get_products(
         seller_id=seller_id,
         warehouse_id=warehouse_id,
     )
+    return sanitize_public_response(response)
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_product_by_id(product_id: RequiredId):
-    """Retrieve complete raw catalog information by backend product ID. Use get_product for normal compact product questions and this tool only when full internal detail is needed. The response is read-only."""
-    return await fetch_product_by_id(product_id)
+    """Retrieve available catalog detail by backend product ID with internal configuration and raw import data removed. Use get_product for normal compact product questions; use this tool only when additional backend fields are needed. The response is read-only."""
+    return sanitize_public_response(await fetch_product_by_id(product_id))
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
@@ -561,11 +573,15 @@ def _install_tool_error_boundary() -> None:
             async def wrapped(*args, _original=original, _name=tool.name, **kwargs):
                 try:
                     return await _original(*args, **kwargs)
+                except ToolError:
+                    raise
                 except ValueError as error:
-                    raise ToolError(f"Invalid input for {_name}: {error}") from error
+                    raise StructuredToolError("VALIDATION_ERROR", str(error)) from error
                 except Exception as error:
                     logger.exception("Tool %s raised an unexpected exception", _name)
-                    raise ToolError(f"{_name} failed ({type(error).__name__})") from error
+                    raise StructuredToolError(
+                        "INTERNAL_ERROR", f"{_name} failed ({type(error).__name__})"
+                    ) from error
 
         else:
 
@@ -573,20 +589,26 @@ def _install_tool_error_boundary() -> None:
             def wrapped(*args, _original=original, _name=tool.name, **kwargs):
                 try:
                     return _original(*args, **kwargs)
+                except ToolError:
+                    raise
                 except ValueError as error:
-                    raise ToolError(f"Invalid input for {_name}: {error}") from error
+                    raise StructuredToolError("VALIDATION_ERROR", str(error)) from error
                 except Exception as error:
                     logger.exception("Tool %s raised an unexpected exception", _name)
-                    raise ToolError(f"{_name} failed ({type(error).__name__})") from error
+                    raise StructuredToolError(
+                        "INTERNAL_ERROR", f"{_name} failed ({type(error).__name__})"
+                    ) from error
 
         tool.fn = wrapped
 
 
+register_enabled_write_tools(mcp)
 _install_tool_error_boundary()
 
 
 if __name__ == "__main__":
     validate_mcp_oauth_configuration()
+    validate_write_configuration()
     mcp.run()
 
 

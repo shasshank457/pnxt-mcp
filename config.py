@@ -25,11 +25,25 @@ MCP_AUTO_APPROVE_CLIENT_IDS = tuple(
     if client_id.strip()
 )
 MCP_OAUTH_REDIRECT_URI = os.getenv("MCP_OAUTH_REDIRECT_URI", "")
+OAUTH_ALLOWED_REDIRECT_URIS = tuple(
+    uri.strip()
+    for uri in os.getenv(
+        "OAUTH_ALLOWED_REDIRECT_URIS",
+        "https://claude.ai/api/mcp/auth_callback,"
+        "https://claude.com/api/mcp/auth_callback,"
+        "https://chatgpt.com/connector_platform_oauth_redirect",
+    ).split(",")
+    if uri.strip()
+)
+CHATGPT_REDIRECT_URI = os.getenv("CHATGPT_REDIRECT_URI", "").strip()
 MCP_OAUTH_CODE_TTL = int(os.getenv("MCP_OAUTH_CODE_TTL", "60"))
 MCP_OAUTH_TOKEN_TTL = int(os.getenv("MCP_OAUTH_TOKEN_TTL", "3600"))
 MCP_CIMD_ALLOWED_HOSTS = tuple(
     host.strip().lower()
-    for host in os.getenv("MCP_CIMD_ALLOWED_HOSTS", "").split(",")
+    for host in os.getenv(
+        "CIMD_ALLOWED_HOSTS",
+        os.getenv("MCP_CIMD_ALLOWED_HOSTS", "chatgpt.com,claude.ai,claude.com"),
+    ).split(",")
     if host.strip()
 )
 MCP_AUTH_RATE_LIMIT_IP = int(os.getenv("MCP_AUTH_RATE_LIMIT_IP", "10"))
@@ -46,6 +60,18 @@ MCP_SESSION_ENCRYPTION_REQUIRED = os.getenv(
 # proxies must configure this explicitly.
 MCP_FORWARDED_ALLOW_IPS = os.getenv("MCP_FORWARDED_ALLOW_IPS", "")
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
+PNXT_ENABLE_WRITE_TOOLS = os.getenv("PNXT_ENABLE_WRITE_TOOLS", "false").lower() == "true"
+PNXT_WRITE_TOOLS_ALLOWLIST = tuple(
+    name.strip()
+    for name in os.getenv("PNXT_WRITE_TOOLS_ALLOWLIST", "").split(",")
+    if name.strip()
+)
+PNXT_CONFIRMATION_SECRET = os.getenv("PNXT_CONFIRMATION_SECRET", "")
+PNXT_CONFIRMATION_TTL_SECONDS = int(os.getenv("PNXT_CONFIRMATION_TTL_SECONDS", "300"))
+PNXT_WRITE_TIMEOUT_SECONDS = int(os.getenv("PNXT_WRITE_TIMEOUT_SECONDS", "30"))
+PNXT_WRITE_FREE_TEXT_MAX_LENGTH = int(
+    os.getenv("PNXT_WRITE_FREE_TEXT_MAX_LENGTH", "1000")
+)
 
 
 def validate_mcp_oauth_configuration() -> None:
@@ -69,3 +95,20 @@ def validate_mcp_oauth_configuration() -> None:
         raise RuntimeError(
             "MCP_OAUTH_REDIRECT_URI must be an HTTPS callback URL without credentials or fragments"
         )
+
+
+def validate_write_configuration() -> None:
+    """Fail closed when the optional write framework is enabled incorrectly."""
+    if not PNXT_ENABLE_WRITE_TOOLS:
+        return
+    if len(PNXT_CONFIRMATION_SECRET.encode()) < 32:
+        raise RuntimeError(
+            "PNXT_CONFIRMATION_SECRET must be configured with at least 32 bytes "
+            "when PNXT_ENABLE_WRITE_TOOLS=true"
+        )
+    if PNXT_CONFIRMATION_TTL_SECONDS <= 0:
+        raise RuntimeError("PNXT_CONFIRMATION_TTL_SECONDS must be positive")
+    if PNXT_WRITE_TIMEOUT_SECONDS <= 0:
+        raise RuntimeError("PNXT_WRITE_TIMEOUT_SECONDS must be positive")
+    if PNXT_WRITE_FREE_TEXT_MAX_LENGTH <= 0:
+        raise RuntimeError("PNXT_WRITE_FREE_TEXT_MAX_LENGTH must be positive")

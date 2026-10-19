@@ -76,6 +76,35 @@ POINTNXT_REFRESH_ENDPOINT=/auth/refresh
 POINTNXT_TENANT_ID=<tenant-id>
 ```
 
+### Optional write-tool framework
+
+Write tools are disabled unless explicitly enabled. No business write tools are
+currently registered; future write tools must be added through the shared
+preview/commit framework in `services/write_tools.py`.
+
+```env
+PNXT_ENABLE_WRITE_TOOLS=false
+PNXT_WRITE_TOOLS_ALLOWLIST=
+PNXT_CONFIRMATION_SECRET=<at-least-32-byte-secret-when-enabled>
+PNXT_CONFIRMATION_TTL_SECONDS=300
+PNXT_WRITE_TIMEOUT_SECONDS=30
+PNXT_WRITE_FREE_TEXT_MAX_LENGTH=1000
+```
+
+When enabled, `PNXT_CONFIRMATION_SECRET` is required and must be at least 32
+bytes. Confirmation tokens are stateless HMAC-SHA256 tokens, while consumed
+nonces and idempotency results use the framework's replaceable state-store
+interface. The current MCP OAuth/session grants are already stored in the
+SQLite database at `POINTNXT_SESSION_STORE_PATH`; deployments must keep that
+path on the persistent Docker volume and keep `MCP_SESSION_ENCRYPTION_KEY`
+stable across rebuilds.
+
+To define a future business write, create a `WriteToolSpec` with the business
+`load_target`, `validate`, `build_preview`, and `execute` callbacks, then pass
+it to `register_enabled_write_tools`. The framework automatically adds
+`confirm`, `confirmation_token`, and `idempotency_key`, performs target/version
+checks, and maps errors into structured write responses.
+
 The client sends `Authorization: Bearer <token>`, `x-tenant-id`, and JSON content headers.
 
 ## Authentication refresh

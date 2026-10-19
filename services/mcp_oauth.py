@@ -2,6 +2,8 @@
 import base64
 import hashlib
 import html
+import logging
+import re
 import secrets
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -10,12 +12,14 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from config import (
     AUTH_CALLBACK_TIMEOUT,
+    CHATGPT_REDIRECT_URI,
     MCP_AUTO_APPROVE_CLIENT_IDS,
     MCP_OAUTH_CLIENT_ID,
     MCP_OAUTH_CODE_TTL,
     MCP_OAUTH_REDIRECT_URI,
     MCP_OAUTH_TOKEN_TTL,
     MCP_PUBLIC_BASE_URL,
+    OAUTH_ALLOWED_REDIRECT_URIS,
 )
 from services import auth_bridge, session_store
 from services.auth_session import get_session
@@ -28,10 +32,30 @@ from services.request_context import reset_request_key, set_request_key
 MCP_SCOPE = "mcp"
 MCP_RESOURCE = f"{MCP_PUBLIC_BASE_URL}/mcp"
 MCP_REFRESH_TOKEN_TTL = MCP_OAUTH_TOKEN_TTL * 30
+logger = logging.getLogger(__name__)
+_CHATGPT_REDIRECT_PATTERN = re.compile(
+    r"^https://chatgpt\.com/connector/oauth/[A-Za-z0-9_-]+$"
+)
 
 
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _oauth_error(error: str, description: str, status_code: int = 400) -> JSONResponse:
+    return JSONResponse(
+        {"error": error, "error_description": description}, status_code=status_code
+    )
+
+
+def _resource_matches(value: str) -> bool:
+    return value.rstrip("/") == MCP_RESOURCE.rstrip("/")
+
+
+def _known_redirect_uri(value: str) -> bool:
+    return value in OAUTH_ALLOWED_REDIRECT_URIS or value == MCP_OAUTH_REDIRECT_URI or (
+        CHATGPT_REDIRECT_URI and value == CHATGPT_REDIRECT_URI
+    ) or bool(_CHATGPT_REDIRECT_PATTERN.fullmatch(value))
 
 
 _CONSENT_SECURITY_HEADERS = {
@@ -67,6 +91,7 @@ def _client_ok(client_id: str, redirect_uri: str) -> bool:
         and bool(MCP_OAUTH_REDIRECT_URI)
         and is_https
         and secrets.compare_digest(redirect_uri, MCP_OAUTH_REDIRECT_URI)
+        and _known_redirect_uri(redirect_uri)
     )
 
 
@@ -137,14 +162,32 @@ async def authorize(request):
     state = query.get("state", "")
     challenge = query.get("code_challenge", "")
     method = query.get("code_challenge_method", "")
-    scope = query.get("scope", MCP_SCOPE)
+    scope = MCP_SCOPE
     resource = query.get("resource", "")
-    if scope != MCP_SCOPE:
-        return JSONResponse({"error": "invalid_scope"}, status_code=400)
-    if resource != MCP_RESOURCE:
-        return JSONResponse({"error": "invalid_target"}, status_code=400)
-    if not state or not challenge or method != "S256" or not await _resolve_client(client_id, redirect_uri):
-        return JSONResponse({"error": "invalid_request"}, status_code=400)
+    # This server exposes one scope. Unknown requested scopes are ignored and
+    # the server's default scope is used, without granting additional access.
+    if not _resource_matches(resource):
+        logger.info("OAuth authorize rejected: invalid resource client_id=%s redirect_uri=%s", client_id, redirect_uri)
+        return _oauth_error("invalid_target", "resource must identify this MCP server")
+    if not state:
+        reason = "missing state"
+    elif not challenge:
+        reason = "missing code_challenge"
+    elif method != "S256":
+        reason = "code_challenge_method must be S256"
+    else:
+        try:
+            client_valid = await _resolve_client(client_id, redirect_uri)
+        except ClientMetadataError as exc:
+            logger.info("OAuth authorize rejected: CIMD validation failed: %s client_id=%s redirect_uri=%s", exc, client_id, redirect_uri)
+            return _oauth_error("invalid_request", str(exc))
+        if not client_valid:
+            reason = "client_id or redirect_uri is not authorized"
+        else:
+            reason = ""
+    if reason:
+        logger.info("OAuth authorize rejected: %s client_id=%s redirect_uri=%s", reason, client_id, redirect_uri)
+        return _oauth_error("invalid_request", reason)
     transaction_id = secrets.token_urlsafe(32)
     auth_session_key = f"oauth:{transaction_id}"
     transaction = {
@@ -155,7 +198,7 @@ async def authorize(request):
         "auth_session_key": auth_session_key,
         "code_challenge": challenge,
         "scope": scope,
-        "resource": resource,
+        "resource": MCP_RESOURCE,
     }
     session_store.put_oauth_transaction(state, transaction, time.time() + AUTH_CALLBACK_TIMEOUT)
     # The existing PointNXT callback transaction uses the durable OAuth
@@ -175,15 +218,15 @@ async def callback(request):
 
     state = request.query_params.get("state", "")
     if request.query_params.get("accessToken") or request.query_params.get("access_token"):
-        return JSONResponse({"error": "invalid_request"}, status_code=400)
+        return _oauth_error("invalid_request", "direct PointNXT tokens are not accepted")
     transaction = session_store.consume_oauth_transaction(state)
     if not transaction:
-        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+        return _oauth_error("invalid_grant", "authorization request is invalid or expired")
     key = transaction["auth_session_key"]
     if request.query_params.get("bridge") == "1":
         completion = session_store.consume_auth_bridge_completion(state)
         if not completion or completion["request_key"] != key:
-            return JSONResponse({"error": "access_denied"}, status_code=403)
+            return _oauth_error("access_denied", "authorization was not completed", 403)
     else:
         result = await auth_callback(request)
         if getattr(result, "status_code", 500) >= 400:
@@ -194,7 +237,7 @@ async def callback(request):
     try:
         session = get_session()
         if not session or not session.is_authenticated():
-            return JSONResponse({"error": "access_denied"}, status_code=403)
+            return _oauth_error("access_denied", "authenticated session is unavailable", 403)
         consent_id = secrets.token_urlsafe(32)
         consent_transaction = {
             **transaction,
@@ -232,7 +275,7 @@ async def callback(request):
             decision="approved",
         )
         if not consumed:
-            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+            return _oauth_error("invalid_grant", "authorization transaction is invalid")
         return _issue_authorization_code(consumed)
     return RedirectResponse(
         f"{MCP_PUBLIC_BASE_URL}/oauth/consent?{urlencode({'consent_id': consent_id})}",
@@ -329,7 +372,7 @@ async def consent_decision(request):
         return HTMLResponse("Authorization request is invalid or expired.", status_code=400, headers=_CONSENT_SECURITY_HEADERS)
     if decision == "denied":
         return RedirectResponse(
-            f"{transaction['redirect_uri']}?{urlencode({'error': 'access_denied', 'state': transaction['state']})}",
+            f"{transaction['redirect_uri']}?{urlencode({'error': 'access_denied', 'error_description': 'authorization was denied', 'state': transaction['state']})}",
             status_code=302,
         )
     return _issue_authorization_code(transaction)
@@ -339,22 +382,30 @@ async def token(request):
     values = {key: item[0] for key, item in parse_qs((await request.body()).decode()).items()}
     grant_type = values.get("grant_type")
     if grant_type not in {"authorization_code", "refresh_token"}:
-        return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
+        return _oauth_error("unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
     client_id = values.get("client_id", "")
     resource = values.get("resource", "")
-    if resource != MCP_RESOURCE:
-        return JSONResponse({"error": "invalid_target"}, status_code=400)
+    if not _resource_matches(resource):
+        logger.info("OAuth token rejected: invalid resource client_id=%s redirect_uri=%s", client_id, values.get("redirect_uri", ""))
+        return _oauth_error("invalid_target", "resource must identify this MCP server")
+    metadata = None
+    if client_id.startswith("https://"):
+        try:
+            metadata = await resolve_client_metadata(client_id)
+        except ClientMetadataError as exc:
+            logger.info("OAuth token rejected: CIMD validation failed: %s client_id=%s redirect_uri=%s", exc, client_id, values.get("redirect_uri", ""))
+            return _oauth_error("invalid_client", str(exc), 401)
     if grant_type == "refresh_token":
         refresh_token = values.get("refresh_token", "")
         if not refresh_token:
-            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+            return _oauth_error("invalid_grant", "refresh_token is required")
         refresh_hash = _hash(refresh_token)
         existing = session_store.get_mcp_refresh_token(refresh_hash)
         if not existing:
-            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+            return _oauth_error("invalid_grant", "refresh_token is invalid or expired")
         session = session_store.get(existing["auth_session_key"])
         if not session or not session.is_authenticated():
-            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+            return _oauth_error("invalid_grant", "PointNXT session is no longer authenticated")
         record = session_store.consume_mcp_refresh_token(
             refresh_hash,
             client_id=client_id,
@@ -364,7 +415,7 @@ async def token(request):
             membership_id=session.membership_id,
         )
         if not record:
-            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+            return _oauth_error("invalid_grant", "refresh_token is invalid or has already been used")
         access_token = secrets.token_urlsafe(48)
         new_refresh_token = secrets.token_urlsafe(48)
         expires_at = time.time() + MCP_OAUTH_TOKEN_TTL
@@ -382,25 +433,27 @@ async def token(request):
 
     redirect_uri = values.get("redirect_uri", "")
     fixed_client = _client_ok(client_id, redirect_uri)
-    if not fixed_client:
+    if not fixed_client and metadata is None:
         try:
             metadata = await resolve_client_metadata(client_id)
         except ClientMetadataError:
-            return JSONResponse({"error": "invalid_client"}, status_code=401)
+            return _oauth_error("invalid_client", "client_id is not registered", 401)
         if metadata.get("client_id") != client_id:
-            return JSONResponse({"error": "invalid_client"}, status_code=401)
+            return _oauth_error("invalid_client", "client metadata client_id does not match", 401)
+    if metadata is not None and redirect_uri not in metadata.get("redirect_uris", []):
+        return _oauth_error("invalid_grant", "redirect_uri was not registered for this client")
     record = session_store.consume_oauth_code(_hash(values.get("code", "")))
     if (
         not record
         or record["client_id"] != client_id
         or record["redirect_uri"] != redirect_uri
-        or record.get("resource") != resource
+        or not _resource_matches(record.get("resource", ""))
     ):
-        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+        return _oauth_error("invalid_grant", "authorization code, client_id, redirect_uri, or resource is invalid")
     verifier = values.get("code_verifier", "")
     expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     if not verifier or not secrets.compare_digest(expected, record["code_challenge"]):
-        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+        return _oauth_error("invalid_grant", "code_verifier does not match the authorization request")
     access_token = secrets.token_urlsafe(48)
     refresh_token = secrets.token_urlsafe(48)
     expires_at = time.time() + MCP_OAUTH_TOKEN_TTL

@@ -111,10 +111,17 @@ async def get_orders_summary(
         timezone=timezone,
     )
     data = orders_response.get("data", {})
-    orders = data.get("items", []) or []
+    orders = [
+        order for order in (data.get("items", []) or []) if not order.get("isTest")
+    ]
 
     def order_amount(order: dict[str, Any]) -> float:
         return order.get("grandTotal", order.get("orderTotal", 0)) or 0
+
+    def money(value: Any) -> float | int:
+        if value is None:
+            return 0
+        return round(value, 2)
 
     total_order_value = sum(order_amount(order) for order in orders)
     status_breakdown = {}
@@ -149,15 +156,15 @@ async def get_orders_summary(
             "total": data.get("totalItems", data.get("total", len(orders))),
         },
         "total_orders": len(orders),
-        "total_order_value": total_order_value,
-        "average_order_value": (total_order_value / len(orders) if orders else 0),
+        "total_order_value": money(total_order_value),
+        "average_order_value": money(total_order_value / len(orders) if orders else 0),
         "status_breakdown": status_breakdown,
         "payment_method_breakdown": payment_method_breakdown,
         "top_5_recent_orders": [
             {
                 "order_number": order.get("orderNo"),
                 "customer": order.get("customer"),
-                "amount": order_amount(order),
+                "amount": money(order_amount(order)),
                 "status": order.get("orderStatus"),
             }
             for order in recent_orders
@@ -228,6 +235,7 @@ async def search_orders(
     items = data.get("items", []) or []
     return {
         "found": bool(items),
+        "message": None if items else "No matching orders found.",
         "timezone": resolve_timezone(timezone)[0],
         "period": local_date_period(start_date, end_date, timezone),
         "pagination": data.get("metadata", {}),
@@ -319,13 +327,28 @@ def _compact_order(order: dict[str, Any], timezone_name: str | None = None) -> d
         )
 
     warehouse = order.get("warehouse") or {}
+    status = order.get("orderStatus")
+    order_date = order.get("orderDate") or order.get("createdAt")
+    confirmed_at = order.get("confirmedAt")
+    fulfilled_at = order.get("fulfilledAt")
+    if not confirmed_at and status in {
+        "CONFIRMED",
+        "PARTIALLY_FULFILLED",
+        "FULFILLED",
+        "DELIVERED",
+    }:
+        confirmed_at = order_date
+    if not fulfilled_at and status in {"FULFILLED", "DELIVERED"}:
+        fulfilled_at = order_date
     compact = {
         "id": order.get("id"),
         "order_number": order.get("orderNo"),
         "channel_order_number": order.get("channelOrderNo"),
         "order_date": order.get("orderDate"),
         "order_date_local": local_timestamp(order.get("orderDate"), timezone_name),
-        "status": order.get("orderStatus"),
+        "status": status,
+        "confirmed_at": confirmed_at,
+        "fulfilled_at": fulfilled_at,
         "customer": _without_none({
             "id": customer.get("id") or order.get("customerId"),
             "name": customer_name or None,

@@ -11,6 +11,7 @@ from mcp.server.context import (
 
 from services.mcp_oauth import validate_bearer
 from services.request_context import reset_request_key, set_request_key
+from services.tool_errors import StructuredToolError
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,9 @@ class MCPSessionMiddleware(ServerMiddleware[Any]):
         if request is not None:
             if not isinstance(session_id, str) or not session_id.strip():
                 _log_completion(method, None)
-                raise RuntimeError("No stable MCP session identity is available")
+                raise StructuredToolError(
+                    "AUTH_REQUIRED", "No stable MCP session identity is available"
+                )
             key = session_id.strip()
         else:
             key = session_id or "stdio"
@@ -68,7 +71,7 @@ class MCPSessionMiddleware(ServerMiddleware[Any]):
                 authorization[7:].strip(), str(key)
             ):
                 _log_completion(method, None)
-                raise RuntimeError("Invalid MCP access token")
+                raise StructuredToolError("AUTH_REQUIRED", "Invalid MCP access token")
         token = set_request_key(str(key))
         result = None
         try:
