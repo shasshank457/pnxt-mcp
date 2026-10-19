@@ -23,7 +23,8 @@ def _metadata():
         "redirect_uris": [REDIRECT_URI],
         "grant_types": ["authorization_code"],
         "response_types": ["code"],
-        "token_endpoint_auth_method": "none",
+        "token_endpoint_auth_method": "private_key_jwt",
+        "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
     }
 
 
@@ -131,4 +132,14 @@ def test_cimd_rejects_non_allowlisted_host(monkeypatch):
     )
     with pytest.raises(oauth_client_metadata.ClientMetadataError, match="allowlisted"):
         oauth_client_metadata._public_addresses("evil.example")
+
+
+def test_cimd_rejects_private_only_authentication():
+    document = _metadata()
+    document.pop("token_endpoint_auth_methods_supported")
+    with pytest.raises(
+        oauth_client_metadata.ClientMetadataError,
+        match="public PKCE clients",
+    ):
+        oauth_client_metadata.validate_metadata(CLIENT_ID, document)
 

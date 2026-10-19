@@ -115,9 +115,16 @@ def validate_metadata(client_id: str, document: object) -> dict:
     if not isinstance(response_types, list) or "code" not in response_types:
         raise ClientMetadataError("client does not support code response")
     auth_method = document.get("token_endpoint_auth_method", "none")
-    if auth_method != "none":
+    supported_auth_methods = document.get("token_endpoint_auth_methods_supported", [])
+    if supported_auth_methods and not isinstance(supported_auth_methods, list):
+        raise ClientMetadataError("invalid token endpoint authentication methods")
+    if auth_method != "none" and "none" not in supported_auth_methods:
         raise ClientMetadataError("only public PKCE clients are supported")
-    return {**document, "redirect_uris": validated}
+    return {
+        **document,
+        "redirect_uris": validated,
+        "token_endpoint_auth_method": "none",
+    }
 
 
 async def _fetch_document(url: str) -> dict:
