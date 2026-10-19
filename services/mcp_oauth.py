@@ -472,21 +472,41 @@ async def revoke(request):
 
 
 def validate_bearer(token: str, session_key: str) -> bool:
+    token_fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
     record = session_store.bind_mcp_token(_hash(token), session_key)
     if not record:
+        logger.warning(
+            "MCP bearer rejected reason=missing_expired_revoked_or_bound_to_other_session "
+            "token_fingerprint=%s session_key_present=%s",
+            token_fingerprint,
+            bool(session_key),
+        )
         return False
     durable = session_store.get(record["auth_session_key"])
     if not durable:
-        return False
-    if not all(
-        (
-            record.get("resource") == MCP_RESOURCE,
-            durable.user_id == record["user_id"],
-            durable.tenant_id == record["tenant_id"],
-            durable.membership_id == record["membership_id"],
-            durable.is_authenticated(),
+        logger.warning(
+            "MCP bearer rejected reason=durable_session_missing token_fingerprint=%s",
+            token_fingerprint,
         )
-    ):
+        return False
+    checks = {
+        "resource": _resource_matches(record.get("resource", "")),
+        "user": durable.user_id == record["user_id"],
+        "tenant": durable.tenant_id == record["tenant_id"],
+        "membership": durable.membership_id == record["membership_id"],
+        "authenticated": durable.is_authenticated(),
+    }
+    if not all(checks.values()):
+        logger.warning(
+            "MCP bearer rejected reason=session_claim_mismatch token_fingerprint=%s "
+            "resource=%s user=%s tenant=%s membership=%s authenticated=%s",
+            token_fingerprint,
+            checks["resource"],
+            checks["user"],
+            checks["tenant"],
+            checks["membership"],
+            checks["authenticated"],
+        )
         return False
     session_store.set_(session_key, durable)
     return True
