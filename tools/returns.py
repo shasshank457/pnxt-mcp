@@ -3,6 +3,7 @@
 from typing import Any
 
 from services.validation import optional_id, optional_text, page_limit
+from services.tool_errors import unsupported_operation
 from tools.orders import get_orders
 from tools.status_options import RETURN_STATUSES
 
@@ -174,3 +175,91 @@ async def get_order_returns(order_reference: str) -> dict[str, Any]:
         "returns": returns,
         "message": None if returns else "No return records found for this order.",
     }
+
+
+async def get_return_details(
+    order_reference: str | None = None,
+    return_request_id: str | None = None,
+) -> dict[str, Any]:
+    """Return the backend-supported return view for an order/reference.
+
+    PointNXT currently exposes returns only through order records.  A dedicated
+    return_request_id therefore cannot be resolved and is rejected explicitly.
+    """
+    optional_text(order_reference, "order_reference")
+    optional_text(return_request_id, "return_request_id")
+    if return_request_id:
+        raise ValueError(
+            "The PointNXT backend has no dedicated return-request endpoint or return IDs; provide order_reference."
+        )
+    if not order_reference:
+        raise ValueError("order_reference is required because returns are derived from orders")
+    return await get_order_returns(order_reference)
+
+
+async def find_pending_returns(
+    limit: int = 20,
+    page: int = 1,
+    customer_id: str | None = None,
+    warehouse_id: str | None = None,
+) -> dict[str, Any]:
+    """List orders in the actual backend status used for pending return action."""
+    return await search_returns(
+        limit=limit,
+        page=page,
+        return_status="RETURN_REQUESTED",
+        customer_id=customer_id,
+        warehouse_id=warehouse_id,
+    )
+
+
+async def confirm_return_request(
+    order_reference: str,
+    reason: str | None = None,
+    confirm: bool = False,
+    confirmation_token: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Validate an order return candidate, then fail closed without a write endpoint."""
+    optional_text(order_reference, "order_reference", required=True)
+    optional_text(reason, "reason")
+    if confirmation_token is not None or idempotency_key is not None:
+        optional_text(confirmation_token, "confirmation_token")
+        optional_text(idempotency_key, "idempotency_key")
+    details = await get_order_returns(order_reference)
+    if not details["found"]:
+        raise ValueError("Order is not currently represented in a backend return status")
+    result = {
+        "status": "preview",
+        "action": "confirm_return_request",
+        "order_reference": order_reference.strip().lstrip("#"),
+        "current_return_records": details["returns"],
+        "reason": reason,
+        "confirmation_required": True,
+        "backend_capability": False,
+        "message": "Preview only. Explicit confirmation is required, but PointNXT currently has no endpoint to create a return request.",
+    }
+    if confirm:
+        raise unsupported_operation(
+            "a return-request create/confirm endpoint",
+            action="confirm_return_request",
+            details={"order_reference": result["order_reference"], "confirmation_required": True},
+        )
+    return {key: value for key, value in result.items() if value is not None}
+
+
+async def create_support_ticket(
+    subject: str,
+    description: str,
+    order_reference: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Report that ticket creation is unavailable; never store a fake ticket."""
+    optional_text(subject, "subject", required=True)
+    optional_text(description, "description", required=True)
+    optional_text(order_reference, "order_reference")
+    optional_text(idempotency_key, "idempotency_key")
+    raise unsupported_operation(
+        "a support-ticket creation endpoint or ticketing integration",
+        action="create_support_ticket",
+    )

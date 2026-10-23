@@ -11,3 +11,15 @@ class StructuredToolError(ToolError):
         self.message = message
         self.details = details or {}
         super().__init__(f"{code}: {message}")
+
+
+def unsupported_operation(capability: str, *, action: str, details: dict | None = None) -> StructuredToolError:
+    """Build a standard fail-closed error for an absent backend capability."""
+    merged = {"action": action, "write_performed": False}
+    if details:
+        merged.update(details)
+    return StructuredToolError(
+        "UNSUPPORTED_OPERATION",
+        f"PointNXT does not expose {capability}; no write was performed.",
+        details=merged,
+    )

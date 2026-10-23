@@ -2,10 +2,14 @@ import asyncio
 import logging
 from typing import Any
 
+import httpx
+
 from services.pointnxt_api import PointNXTAPI
 from tools.status_options import PRODUCT_STATUSES
 
 MAX_PRODUCT_PAGE_SIZE = 100
+PRODUCT_SKU_SCAN_MAX_PAGES = 25
+PRODUCT_SKU_SCAN_PAGE_SIZE = 100
 PRODUCT_LIST_COUNT_BASIS = "Paginated products returned by /commerce/products."
 PRODUCT_SUMMARY_COUNT_BASIS = (
     "Backend aggregate product summary; its scope may differ from product-list pages."
@@ -65,7 +69,60 @@ async def get_products(
         if value is not None
     }
 
-    return await get_api().async_get("/commerce/products", params=params)
+    api = get_api()
+    try:
+        return await api.async_get("/commerce/products", params=params)
+    except httpx.HTTPStatusError as error:
+        if not sku or error.response.status_code != 400:
+            raise
+        return await _scan_products_by_sku(api, sku, limit, page)
+
+
+async def _scan_products_by_sku(
+    api: PointNXTAPI, sku: str, limit: int, page: int
+) -> dict[str, Any]:
+    """Find SKU matches when the backend rejects the unsupported sku filter."""
+    matches: list[dict[str, Any]] = []
+    scanned_pages = 0
+    total_pages: int | None = None
+    for scan_page in range(1, PRODUCT_SKU_SCAN_MAX_PAGES + 1):
+        response = await api.async_get(
+            "/commerce/products",
+            params={
+                "limit": PRODUCT_SKU_SCAN_PAGE_SIZE,
+                "page": scan_page,
+            },
+        )
+        data = response.get("data", {})
+        items = data.get("items", []) or []
+        matches.extend(
+            item for item in items
+            if isinstance(item, dict)
+            and str(item.get("sku", "")).strip().casefold() == sku.strip().casefold()
+        )
+        scanned_pages = scan_page
+        metadata = data.get("metadata", {}) or {}
+        total_items = metadata.get("totalItems", data.get("totalItems"))
+        if isinstance(total_items, int) and total_items >= 0:
+            total_pages = max(
+                1, (total_items + PRODUCT_SKU_SCAN_PAGE_SIZE - 1)
+                // PRODUCT_SKU_SCAN_PAGE_SIZE
+            )
+        if not items or (total_pages is not None and scan_page >= total_pages):
+            break
+
+    start = (page - 1) * limit
+    end = start + limit
+    partial = scanned_pages >= PRODUCT_SKU_SCAN_MAX_PAGES and (
+        total_pages is None or scanned_pages < total_pages
+    )
+    metadata = {
+        "page": page,
+        "limit": limit,
+        "totalItems": len(matches),
+        "total_is_partial": partial,
+    }
+    return {"data": {"items": matches[start:end], "metadata": metadata}}
 
 
 async def get_product_summary() -> dict[str, Any]:

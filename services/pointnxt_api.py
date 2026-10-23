@@ -622,9 +622,11 @@ class PointNXTAPI:
     async def _async_request(
         self, method: str, endpoint: str, _retry_after_refresh: bool = True, **kwargs
     ) -> dict:
-        max_attempts = 3
+        retry = kwargs.pop("retry", True)
+        max_attempts = 3 if retry else 1
         retryable_statuses = {502, 503, 504}
         timeout = kwargs.pop("timeout", 30)
+        custom_headers = kwargs.pop("headers", None)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             session = get_session()
@@ -635,6 +637,9 @@ class PointNXTAPI:
                     invalidate_session()
                     raise RuntimeError("Please sign in to PointNXT first.")
             self._apply_auth()
+            request_headers = dict(self.headers)
+            if custom_headers:
+                request_headers.update(custom_headers)
             for attempt in range(1, max_attempts + 1):
                 request_id = str(uuid4())
                 started_at = perf_counter()
@@ -644,7 +649,7 @@ class PointNXTAPI:
                     request_id=request_id,
                     method=method,
                     endpoint=endpoint,
-                    tenant_id=self.headers["x-tenant-id"],
+                    tenant_id=request_headers.get("x-tenant-id", ""),
                     params=_safe_params(kwargs.get("params")),
                     attempt=attempt,
                     max_attempts=max_attempts,
@@ -653,7 +658,7 @@ class PointNXTAPI:
                     response = await client.request(
                         method,
                         f"{self.base_url}{endpoint}",
-                        headers=self.headers,
+                        headers=request_headers,
                         **kwargs,
                     )
                 except (httpx.TimeoutException, httpx.ConnectError) as error:
@@ -746,3 +751,58 @@ class PointNXTAPI:
 
     def delete(self, endpoint: str) -> dict:
         return self._request("DELETE", endpoint)
+
+    async def async_request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        json: dict | None = None,
+        params: dict | None = None,
+        headers: dict | None = None,
+        timeout: int | float = 30,
+        retry: bool = True,
+    ) -> dict:
+        """Send an authenticated async request and return its JSON response."""
+        request_id = str(uuid4())
+        started_at = perf_counter()
+        kwargs: dict = {"timeout": timeout, "retry": retry}
+        if json is not None:
+            kwargs["json"] = json
+        if params is not None:
+            kwargs["params"] = params
+        if headers is not None:
+            kwargs["headers"] = headers
+        try:
+            result = await self._async_request(method, endpoint, **kwargs)
+            record_request(
+                request_id=request_id,
+                latency_ms=round((perf_counter() - started_at) * 1000, 2),
+                backend_latency_ms=round((perf_counter() - started_at) * 1000, 2),
+                success=True,
+            )
+            return result
+        except Exception:
+            elapsed = round((perf_counter() - started_at) * 1000, 2)
+            record_request(
+                request_id=request_id,
+                latency_ms=elapsed,
+                backend_latency_ms=elapsed,
+                success=False,
+            )
+            raise
+
+    async def async_put(
+        self, endpoint: str, payload: dict | None = None, **kwargs
+    ) -> dict:
+        return await self.async_request("PUT", endpoint, json=payload, **kwargs)
+
+    async def async_post(
+        self, endpoint: str, payload: dict | None = None, **kwargs
+    ) -> dict:
+        return await self.async_request("POST", endpoint, json=payload, **kwargs)
+
+    async def async_patch(
+        self, endpoint: str, payload: dict | None = None, **kwargs
+    ) -> dict:
+        return await self.async_request("PATCH", endpoint, json=payload, **kwargs)

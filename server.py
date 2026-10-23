@@ -38,7 +38,7 @@ from services.mcp_session_middleware import MCPSessionMiddleware
 from services.metrics import get_metrics
 from services.response_safety import sanitize_public_response
 from services.tool_errors import StructuredToolError
-from services.write_tools import register_enabled_write_tools
+from services.write_tools import WriteError, register_enabled_write_tools
 from tools.auth import auth_callback, auth_check
 from tools.auth import current_user as get_current_user
 from tools.business import (
@@ -54,13 +54,25 @@ from tools.customers import (
     get_customer_context as fetch_customer_context,
 )
 from tools.orders import (
+    confirm_order_status_change as execute_confirm_order_status_change,
+)
+from tools.orders import (
+    find_stuck_orders as search_stuck_orders,
+)
+from tools.orders import (
     get_order as fetch_order,
 )
 from tools.orders import (
     get_order_by_id as fetch_order_by_id,
 )
 from tools.orders import (
+    get_order_details as fetch_order_details,
+)
+from tools.orders import (
     get_order_stats as fetch_order_stats,
+)
+from tools.orders import (
+    get_order_status_transitions as fetch_order_status_transitions,
 )
 from tools.orders import (
     get_orders as fetch_orders,
@@ -73,6 +85,12 @@ from tools.orders import (
 )
 from tools.orders import (
     search_orders as find_orders,
+)
+from tools.operations import (
+    add_order_note as execute_add_order_note,
+    get_courier_rates as fetch_courier_rates,
+    retry_delivery as execute_retry_delivery,
+    update_support_ticket as execute_update_support_ticket,
 )
 from tools.products import (
     get_inventory_summary as fetch_inventory_summary,
@@ -96,18 +114,22 @@ from tools.products import (
     search_products as find_products,
 )
 from tools.returns import (
+    confirm_return_request as execute_confirm_return_request,
+    create_support_ticket as execute_create_support_ticket,
+    find_pending_returns as find_pending_return_requests,
+    get_return_details as fetch_return_details,
     get_order_returns as fetch_order_returns,
 )
 from tools.returns import (
     search_returns as find_returns,
 )
 from tools.shipments import (
+    assign_courier as execute_assign_courier,
+    find_delayed_shipments as search_delayed_shipments,
+    find_untracked_shipments as search_untracked_shipments,
     get_fulfillment_queue as fetch_fulfillment_queue,
-)
-from tools.shipments import (
     get_order_shipments as fetch_order_shipments,
-)
-from tools.shipments import (
+    get_shipment_tracking as fetch_shipment_tracking,
     search_shipments as find_shipments,
 )
 from tools.status_options import (
@@ -134,6 +156,9 @@ READ_ONLY_EXTERNAL = ToolAnnotations(
 READ_ONLY_LOCAL = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, openWorldHint=False
 )
+WRITE_EXTERNAL = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, openWorldHint=False
+)
 
 # Pydantic uses these annotations to describe every exposed argument in the MCP
 # JSON schema.  The values remain strings at runtime so existing tool behavior is
@@ -153,6 +178,18 @@ OrderStatus = Annotated[
     str | None,
     Field(description="PointNXT order status.", json_schema_extra={"enum": list(ORDER_STATUSES)}),
 ]
+RequiredOrderStatus = Annotated[
+    str,
+    Field(description="Requested target PointNXT order status.", json_schema_extra={"enum": list(ORDER_STATUSES)}),
+]
+ThresholdHours = Annotated[
+    int,
+    Field(description="Threshold in hours beyond which an order is considered stuck; defaults to 24."),
+]
+ConfirmFlag = Annotated[
+    bool,
+    Field(description="Commit flag; False generates preview with token, True commits the update."),
+]
 ReturnStatus = Annotated[
     str | None,
     Field(description="Return-related order status.", json_schema_extra={"enum": list(RETURN_STATUSES)}),
@@ -166,6 +203,12 @@ ShipStatus = Annotated[
     Field(description="Stored shipment status.", json_schema_extra={"enum": list(SHIP_STATUSES)}),
 ]
 Flag = Annotated[bool, Field(description="Whether to include the broader result set.")]
+ThresholdDays = Annotated[float, Field(description="Transit threshold in days beyond which a shipment is considered delayed; defaults to 7.0.")]
+OptionalThresholdHours = Annotated[float | None, Field(description="Explicit transit threshold in hours beyond which a shipment is considered delayed.")]
+CourierIdentifier = Annotated[str | None, Field(description="Carrier/courier unique code or identifier, e.g. BLUEDART, DELHIVERY.")]
+CourierName = Annotated[str | None, Field(description="Carrier/courier display name, e.g. Blue Dart, Delhivery.")]
+ServiceType = Annotated[str | None, Field(description="Optional shipping service speed or type, e.g. EXPRESS, STANDARD.")]
+AwbNumber = Annotated[str | None, Field(description="Air Waybill (AWB) or tracking number assigned to the shipment.")]
 
 # Global MCP server object
 mcp = MCPServer("PointNXT MCP", middleware=[MCPSessionMiddleware()])
@@ -387,6 +430,75 @@ async def get_status_transitions():
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def get_order_details(
+    order_id: Identifier = None,
+    order_reference: Reference = None,
+):
+    """Retrieve complete, sanitized details for a specific order by ID or reference. Use this tool for thorough order investigations while preserving customer privacy and data security. The sanitized response includes order status, amounts, line items, address snapshots, and shipment tracking."""
+    return sanitize_public_response(
+        await fetch_order_details(order_id=order_id, order_reference=order_reference)
+    )
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def find_stuck_orders(
+    order_status: OrderStatus = "PENDING",
+    threshold_hours: ThresholdHours = 24,
+    limit: Limit = 20,
+    page: Page = 1,
+    warehouse_id: Identifier = None,
+    channel_id: Identifier = None,
+    timezone: Timezone = None,
+):
+    """Identify orders that have remained in a specified status beyond a configurable time threshold. Uses real backend timestamps and a configurable threshold to clearly distinguish overdue orders from orders that are on track. Status must be a listed enum option and limit is 1-100."""
+    return sanitize_public_response(
+        await search_stuck_orders(
+            order_status=order_status or "PENDING",
+            threshold_hours=threshold_hours,
+            limit=limit,
+            page=page,
+            warehouse_id=warehouse_id,
+            channel_id=channel_id,
+            timezone=timezone,
+        )
+    )
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def get_order_status_transitions(
+    current_status: OrderStatus = None,
+):
+    """Return valid status transitions supported by the existing PointNXT backend. Use this to inspect allowed lifecycle transitions before confirming an order status change. Pass current_status to filter permitted next statuses from that state, or omit to view all mapped transitions."""
+    return sanitize_public_response(
+        await fetch_order_status_transitions(current_status=current_status)
+    )
+
+
+@mcp.tool(annotations=WRITE_EXTERNAL)
+async def confirm_order_status_change(
+    new_status: RequiredOrderStatus,
+    order_id: Identifier = None,
+    order_reference: Reference = None,
+    reason: Text = None,
+    confirm: ConfirmFlag = False,
+    confirmation_token: Text = None,
+    idempotency_key: Text = None,
+):
+    """Update an order status after validating against backend permitted status transitions. Call with confirm=False (default) to preview proposed transition, validate permissions, and obtain a confirmation token. Call with confirm=True and confirmation_token to safely commit the status change with idempotency and concurrency protection."""
+    return sanitize_public_response(
+        await execute_confirm_order_status_change(
+            new_status=new_status,
+            order_id=order_id,
+            order_reference=order_reference,
+            reason=reason,
+            confirm=confirm,
+            confirmation_token=confirmation_token,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_products(
     limit: Limit = 10,
     page: Page = 1,
@@ -503,6 +615,122 @@ async def get_fulfillment_queue(
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def get_shipment_tracking(
+    order_reference: Text = None,
+    shipment_id: Identifier = None,
+    awb: AwbNumber = None,
+):
+    """Retrieve stored tracking details for a specific shipment, order reference, or AWB tracking number. Returns carrier status and tracking events from stored backend data without performing live carrier lookups, and clearly differentiates missing tracking records from backend network errors."""
+    return await fetch_shipment_tracking(order_reference, shipment_id, awb)
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def find_delayed_shipments(
+    threshold_days: ThresholdDays = 7.0,
+    threshold_hours: OptionalThresholdHours = None,
+    warehouse_id: Identifier = None,
+    channel_id: Identifier = None,
+    timezone: Timezone = None,
+    limit: Limit = 20,
+    page: Page = 1,
+):
+    """Identify shipments whose expected delivery dates or transit-time thresholds have been exceeded. Evaluates stored expectedDeliveryDate timestamps first, falling back to a configurable transit threshold in days or hours; never classifies a shipment as delayed solely because tracking events are missing."""
+    return await search_delayed_shipments(
+        threshold_days, threshold_hours, warehouse_id, channel_id, timezone, limit, page
+    )
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def find_untracked_shipments(
+    warehouse_id: Identifier = None,
+    channel_id: Identifier = None,
+    ship_status: ShipStatus = None,
+    limit: Limit = 20,
+    page: Page = 1,
+):
+    """Identify shipments with missing or unusable tracking information. Distinguishes missing tracking AWB numbers, missing courier assignments, and absent tracking events where backend records support these distinctions, returning detailed categorizations and summaries."""
+    return await search_untracked_shipments(warehouse_id, channel_id, ship_status, limit, page)
+
+
+@mcp.tool(annotations=WRITE_EXTERNAL)
+async def assign_courier(
+    order_id: Text = None,
+    order_reference: Text = None,
+    shipment_id: Identifier = None,
+    courier_id: CourierIdentifier = None,
+    courier_name: CourierName = None,
+    service_type: ServiceType = None,
+    reason: Text = None,
+    confirm: ConfirmFlag = False,
+    confirmation_token: Text = None,
+    idempotency_key: Text = None,
+):
+    """Assign an eligible courier to a shipment through the actual backend-supported workflow. Validates shipment state, enforces authentication, verifies courier eligibility, and runs a two-phase confirmation protocol with version concurrency and duplicate-assignment idempotency protection. If courier assignment is unsupported by the backend, reports the exact missing capability without simulating success."""
+    return await execute_assign_courier(
+        order_id=order_id,
+        order_reference=order_reference,
+        shipment_id=shipment_id,
+        courier_id=courier_id,
+        courier_name=courier_name,
+        service_type=service_type,
+        reason=reason,
+        confirm=confirm,
+        confirmation_token=confirmation_token,
+        idempotency_key=idempotency_key,
+    )
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def get_courier_rates(
+    order_reference: Text = None,
+    shipment_id: Identifier = None,
+    origin_postal_code: Text = None,
+    destination_postal_code: Text = None,
+    weight: Annotated[float | None, Field(description="Optional shipment weight used for rate lookup.")] = None,
+):
+    """Retrieve backend-supported courier rates, or report the missing rate integration without inventing prices."""
+    return await fetch_courier_rates(order_reference, shipment_id, origin_postal_code, destination_postal_code, weight)
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def retry_delivery(
+    order_reference: Reference,
+    shipment_id: Identifier = None,
+    reason: Text = None,
+    confirm: ConfirmFlag = False,
+    confirmation_token: Text = None,
+    idempotency_key: Text = None,
+):
+    """Validate a shipment retry candidate and require confirmation; currently reports the absent backend retry workflow."""
+    return await execute_retry_delivery(order_reference, shipment_id, reason, confirm, confirmation_token, idempotency_key)
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def update_support_ticket(
+    ticket_id: RequiredId,
+    status: Text = None,
+    subject: Text = None,
+    description: Text = None,
+    idempotency_key: Text = None,
+):
+    """Update a real support ticket when a backend integration exists; currently fails closed because ticketing is unavailable."""
+    return await execute_update_support_ticket(ticket_id, status, subject, description, idempotency_key)
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def add_order_note(
+    order_reference: Reference,
+    note: Annotated[str, Field(description="Operational note or customer-related update text.")],
+    visibility: Annotated[str, Field(description="Note visibility: internal or customer.")] = "internal",
+    confirm: ConfirmFlag = False,
+    confirmation_token: Text = None,
+    idempotency_key: Text = None,
+):
+    """Validate an order note request and report the missing persistence endpoint without claiming it was saved."""
+    return await execute_add_order_note(order_reference, note, visibility, confirm, confirmation_token, idempotency_key)
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def search_returns(
     limit: Limit = 20,
     page: Page = 1,
@@ -519,6 +747,53 @@ async def search_returns(
 async def get_order_returns(order_reference: Reference):
     """Show read-only return information derived from order status for one order reference. Use search_returns for a paginated return queue and get_order for the normal compact order view. There is no dedicated return ID or reliable item-level return quantity/reason data in the current backend."""
     return await fetch_order_returns(order_reference)
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def get_return_details(
+    order_reference: Text = None,
+    return_request_id: Text = None,
+):
+    """Retrieve return information from the existing order-backed return integration. The backend has no dedicated return IDs or return-request endpoint."""
+    return await fetch_return_details(order_reference, return_request_id)
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def find_pending_returns(
+    limit: Limit = 20,
+    page: Page = 1,
+    customer_id: Identifier = None,
+    warehouse_id: Identifier = None,
+):
+    """List orders awaiting return action using the backend-supported RETURN_REQUESTED status."""
+    return await find_pending_return_requests(limit, page, customer_id, warehouse_id)
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def confirm_return_request(
+    order_reference: Reference,
+    reason: Text = None,
+    confirm: ConfirmFlag = False,
+    confirmation_token: Text = None,
+    idempotency_key: Text = None,
+):
+    """Validate and preview a return request, requiring explicit confirmation; commit reports unsupported because PointNXT has no return-create endpoint."""
+    return await execute_confirm_return_request(
+        order_reference, reason, confirm, confirmation_token, idempotency_key
+    )
+
+
+@mcp.tool(annotations=READ_ONLY_EXTERNAL)
+async def create_support_ticket(
+    subject: Annotated[str, Field(description="Short summary of the customer issue or operational exception.")],
+    description: Annotated[str, Field(description="Detailed description of the issue and relevant context.")],
+    order_reference: Text = None,
+    idempotency_key: Text = None,
+):
+    """Create a support ticket only if a backend ticketing integration exists; currently reports the missing capability without storing a fake ticket."""
+    return await execute_create_support_ticket(
+        subject, description, order_reference, idempotency_key
+    )
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
@@ -575,6 +850,8 @@ def _install_tool_error_boundary() -> None:
                     return await _original(*args, **kwargs)
                 except ToolError:
                     raise
+                except WriteError as error:
+                    raise StructuredToolError(error.code, error.message) from error
                 except ValueError as error:
                     raise StructuredToolError("VALIDATION_ERROR", str(error)) from error
                 except Exception as error:
@@ -591,6 +868,8 @@ def _install_tool_error_boundary() -> None:
                     return _original(*args, **kwargs)
                 except ToolError:
                     raise
+                except WriteError as error:
+                    raise StructuredToolError(error.code, error.message) from error
                 except ValueError as error:
                     raise StructuredToolError("VALIDATION_ERROR", str(error)) from error
                 except Exception as error:
