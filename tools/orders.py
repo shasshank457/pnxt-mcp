@@ -4,7 +4,8 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime
+from datetime import timezone as dt_timezone
 from typing import Any
 from uuid import uuid4
 
@@ -509,7 +510,7 @@ async def get_order_details(
 
 async def find_stuck_orders(
     order_status: str = "PENDING",
-    threshold_hours: int | float = 24,
+    threshold_hours: float = 24,
     limit: int = 20,
     page: int = 1,
     warehouse_id: str | None = None,

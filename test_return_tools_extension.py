@@ -1,8 +1,15 @@
-import pytest
-from services.tool_errors import StructuredToolError
 from unittest.mock import AsyncMock, patch
 
-from tools.returns import confirm_return_request, create_support_ticket, find_pending_returns, get_return_details
+import pytest
+
+from services.tool_errors import StructuredToolError
+from tools.returns import (
+    confirm_return_request,
+    create_support_ticket,
+    find_pending_returns,
+    get_return_details,
+)
+
 
 @pytest.mark.asyncio
 async def test_get_return_details_reuses_order_return_lookup():

@@ -5,7 +5,6 @@
 4. assign_courier
 """
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -251,9 +250,8 @@ async def test_get_shipment_tracking_distinguishes_backend_failure_from_unavaila
     resp = httpx.Response(500, request=req)
     api.async_get = AsyncMock(side_effect=httpx.HTTPStatusError("Internal Server Error", request=req, response=resp))
 
-    with patch("tools.orders.get_api", return_value=api):
-        with pytest.raises(httpx.HTTPStatusError):
-            await get_shipment_tracking(order_reference="500")
+    with patch("tools.orders.get_api", return_value=api), pytest.raises(httpx.HTTPStatusError):
+        await get_shipment_tracking(order_reference="500")
 
 
 # ==============================================================================

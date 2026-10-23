@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from services.validation import optional_id, optional_text
 from services.tool_errors import unsupported_operation
+from services.validation import optional_id, optional_text
 from tools.orders import get_order
 
 

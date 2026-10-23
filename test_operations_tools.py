@@ -1,8 +1,8 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from services.tool_errors import StructuredToolError
 
+from services.tool_errors import StructuredToolError
 from tools.operations import (
     add_order_note,
     get_courier_rates,
@@ -32,9 +32,8 @@ async def test_retry_validates_order_and_requires_confirmation():
 
 @pytest.mark.asyncio
 async def test_note_missing_order_is_rejected():
-    with patch("tools.operations.get_order", new=AsyncMock(return_value={"found": False})):
-        with pytest.raises(ValueError, match="Order was not found"):
-            await add_order_note("missing", "check shipment")
+    with patch("tools.operations.get_order", new=AsyncMock(return_value={"found": False})), pytest.raises(ValueError, match="Order was not found"):
+        await add_order_note("missing", "check shipment")
 
 
 @pytest.mark.asyncio

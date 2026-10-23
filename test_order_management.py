@@ -5,14 +5,12 @@
 4. confirm_order_status_change
 """
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from mcp.server.mcpserver.exceptions import ToolError
 
-from services.auth_session import AuthSession, invalidate_session, set_session
+from services.auth_session import AuthSession
 from services.write_tools import WriteError
 from tools.orders import (
     confirm_order_status_change,

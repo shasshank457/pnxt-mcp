@@ -53,6 +53,18 @@ from tools.customers import (
 from tools.customers import (
     get_customer_context as fetch_customer_context,
 )
+from tools.operations import (
+    add_order_note as execute_add_order_note,
+)
+from tools.operations import (
+    get_courier_rates as fetch_courier_rates,
+)
+from tools.operations import (
+    retry_delivery as execute_retry_delivery,
+)
+from tools.operations import (
+    update_support_ticket as execute_update_support_ticket,
+)
 from tools.orders import (
     confirm_order_status_change as execute_confirm_order_status_change,
 )
@@ -86,12 +98,6 @@ from tools.orders import (
 from tools.orders import (
     search_orders as find_orders,
 )
-from tools.operations import (
-    add_order_note as execute_add_order_note,
-    get_courier_rates as fetch_courier_rates,
-    retry_delivery as execute_retry_delivery,
-    update_support_ticket as execute_update_support_ticket,
-)
 from tools.products import (
     get_inventory_summary as fetch_inventory_summary,
 )
@@ -115,21 +121,41 @@ from tools.products import (
 )
 from tools.returns import (
     confirm_return_request as execute_confirm_return_request,
+)
+from tools.returns import (
     create_support_ticket as execute_create_support_ticket,
+)
+from tools.returns import (
     find_pending_returns as find_pending_return_requests,
-    get_return_details as fetch_return_details,
+)
+from tools.returns import (
     get_order_returns as fetch_order_returns,
+)
+from tools.returns import (
+    get_return_details as fetch_return_details,
 )
 from tools.returns import (
     search_returns as find_returns,
 )
 from tools.shipments import (
     assign_courier as execute_assign_courier,
+)
+from tools.shipments import (
     find_delayed_shipments as search_delayed_shipments,
+)
+from tools.shipments import (
     find_untracked_shipments as search_untracked_shipments,
+)
+from tools.shipments import (
     get_fulfillment_queue as fetch_fulfillment_queue,
+)
+from tools.shipments import (
     get_order_shipments as fetch_order_shipments,
+)
+from tools.shipments import (
     get_shipment_tracking as fetch_shipment_tracking,
+)
+from tools.shipments import (
     search_shipments as find_shipments,
 )
 from tools.status_options import (

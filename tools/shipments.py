@@ -4,9 +4,12 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime
+from datetime import timezone as dt_timezone
 from typing import Any
 from uuid import uuid4
+
+import httpx
 
 from services.auth_session import get_session
 from services.pointnxt_api import PointNXTAPI
@@ -310,9 +313,9 @@ async def get_shipment_tracking(
             status_code = getattr(exc, "status_code", None) or getattr(
                 getattr(exc, "response", None), "status_code", None
             )
-            if status_code in (404, None) and not isinstance(exc, (httpx.HTTPStatusError, httpx.RequestError)):
-                resolved_order = None
-            elif status_code == 404:
+            if status_code == 404 or (
+                status_code is None and not isinstance(exc, (httpx.HTTPStatusError, httpx.RequestError))
+            ):
                 resolved_order = None
             else:
                 raise
@@ -883,7 +886,7 @@ async def assign_courier(
                     raise WriteError("NOT_FOUND", f"Order {resolved_id!r} does not exist.") from exc
             except WriteError:
                 raise
-            except Exception:
+            except (httpx.HTTPError, RuntimeError, ValueError):
                 raise WriteError("NOT_FOUND", f"Order {resolved_id!r} does not exist.") from exc
         else:
             raise map_backend_error(exc, str(uuid4())) from exc

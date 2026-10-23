@@ -760,7 +760,7 @@ class PointNXTAPI:
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
-        timeout: int | float = 30,
+        timeout: float = 30,
         retry: bool = True,
     ) -> dict:
         """Send an authenticated async request and return its JSON response."""
