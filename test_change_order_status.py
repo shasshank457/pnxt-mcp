@@ -73,9 +73,8 @@ async def test_change_order_status_rejects_invalid_input(args):
 async def test_change_order_status_rejects_backend_transition_not_allowed():
     api = api_with_transition()
     framework = WriteToolFramework(secret="x" * 32)
-    with patch("tools.orders.get_api", return_value=api):
-        with pytest.raises(WriteError) as raised:
-            await framework.invoke(CHANGE_ORDER_STATUS_SPEC, {"order_id": ORDER_ID, "order_status": "DELIVERED"}, WriteContext("user-1", "tenant-1"))
+    with patch("tools.orders.get_api", return_value=api), pytest.raises(WriteError) as raised:
+        await framework.invoke(CHANGE_ORDER_STATUS_SPEC, {"order_id": ORDER_ID, "order_status": "DELIVERED"}, WriteContext("user-1", "tenant-1"))
     assert raised.value.code == "TRANSITION_NOT_PERMITTED"
     api.async_request.assert_not_awaited()
 

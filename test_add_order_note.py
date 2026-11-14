@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from services.write_tools import WriteContext, WriteError, WriteToolFramework
 from services import write_tools
+from services.write_tools import WriteContext, WriteError, WriteToolFramework
 from tools.orders import ADD_ORDER_NOTE_SPEC, UPDATE_ORDER_TAGS_SPEC
 
 ORDER_ID = "11111111-1111-4111-8111-111111111111"
