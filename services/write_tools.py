@@ -111,6 +111,7 @@ class WriteToolSpec:
     validate: ValidateWrite
     build_preview: BuildPreview
     execute: ExecuteWrite
+    load_target_on_commit: bool = True
 
 
 class WriteStateStore(Protocol):
@@ -264,6 +265,9 @@ def _sanitize_arguments(args: dict[str, Any], schema: dict[str, Any]) -> dict[st
     for name, value in list(sanitized.items()):
         definition = properties.get(name, {})
         expected_type = definition.get("type")
+        if value is None and definition.get("nullable"):
+            sanitized[name] = value
+            continue
         type_matches = {
             "string": isinstance(value, str),
             "integer": isinstance(value, int) and not isinstance(value, bool),
@@ -272,7 +276,11 @@ def _sanitize_arguments(args: dict[str, Any], schema: dict[str, Any]) -> dict[st
             "object": isinstance(value, dict),
             "array": isinstance(value, list),
         }
-        if expected_type in type_matches and not type_matches[expected_type]:
+        if isinstance(expected_type, list):
+            type_valid = any(type_matches.get(type_name, False) for type_name in expected_type)
+        else:
+            type_valid = type_matches.get(expected_type, True)
+        if expected_type and not type_valid:
             raise WriteError("VALIDATION_ERROR", f"{name} must be a {expected_type}")
         enum = definition.get("enum")
         if enum and value not in enum:
@@ -385,7 +393,10 @@ class WriteToolFramework:
         confirm = args.get("confirm", False)
         if not isinstance(confirm, bool):
             raise WriteError("VALIDATION_ERROR", "confirm must be a boolean.", request_id=context.request_id)
-        target = await _maybe_await(spec.load_target(args, context))
+        if confirm and not spec.load_target_on_commit:
+            target = {"id": args.get("order_id")}
+        else:
+            target = await _maybe_await(spec.load_target(args, context))
         await _maybe_await(spec.validate(args, target, context))
         args_hash = _args_hash(args)
 
@@ -423,6 +434,8 @@ class WriteToolFramework:
             raise WriteError("TOKEN_INVALID", "The confirmation token does not belong to this write request.", request_id=context.request_id)
         if token_payload.get("args_hash") != args_hash:
             raise WriteError("ARGS_CHANGED", "Arguments changed since preview; request a new preview.", request_id=context.request_id)
+        if confirm and not spec.load_target_on_commit:
+            target["version"] = token_payload.get("target_version")
         if token_payload.get("target_id") != _target_id(target) or token_payload.get("target_version") != _target_version(target):
             raise WriteError("RECORD_CHANGED", "The target changed since preview; request a new preview.", request_id=context.request_id)
         if not self.state_store.consume_nonce(token_payload["nonce"], token_payload["expires_at"]):

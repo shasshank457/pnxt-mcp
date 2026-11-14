@@ -1,6 +1,6 @@
 # PointNXT MCP Server
 
-PointNXT MCP is a read-only Model Context Protocol server for retrieving PointNXT orders, products, health information, and metrics through an AI assistant.
+PointNXT MCP is a Model Context Protocol server for retrieving PointNXT data and, when explicitly enabled, safely performing confirmed write operations.
 
 ## Architecture
 
@@ -44,6 +44,14 @@ A request is received by an MCP tool, validated, converted into PointNXT query p
 - `get_order_stats`: Retrieve order dashboard statistics.
 - `get_status_transitions`: Retrieve valid workflow transitions.
 - `get_orders_summary`: Summarize one retrieved order page.
+- `add_order_note`: Preview and, after explicit confirmation, add an internal note to an order by internal UUID. First call it with `order_id` and `note`; then call it with `confirm=true` and the returned `confirmation_token`.
+- `update_order_tags`: Preview and, after explicit confirmation, replace all tags on an order by internal UUID. First call it with `order_id` and the complete `tags` array; then call it with `confirm=true` and the returned `confirmation_token`. This is a replacement, not an append operation.
+- `change_order_status`: Preview and, after explicit confirmation, change an order status using transitions fetched from PointNXT. The tool accepts `order_id`, `order_status`, and optional `notes`, `version`, and `cancel_reason`; backend state-machine rules remain authoritative.
+- `update_order`: Preview and, after explicit confirmation, update approved fulfillment and measurement fields. The tool captures the current backend order version during preview and uses it on commit; status, notes, addresses, totals, currency, force, cancellation reason, warehouse, and model-provided version are excluded.
+- `create_product`: Preview and, after explicit confirmation, create a product using approved catalog fields. Tenant identity is taken from the authenticated session and is never a model input; product creation does not create inventory or channel listings.
+- `update_product`: Preview and, after explicit confirmation, update approved product fields after verifying the product belongs to the authenticated tenant. `tenantId`, identity, pricing, status, stock, ownership, and other excluded fields are never accepted or sent.
+- `update_product_channel_listing`: Preview and, after explicit confirmation, update an existing product-channel listing after verifying product, channel, listing, and tenant ownership through authenticated verification reads. Price and MRP are excluded.
+- `create_order`: Preview and, after explicit confirmation, create an order with validated addresses and line items. The backend calculates totals; payment is not processed, stock is not reserved, and tenant identity is never model-provided.
 
 `get_orders` supports `limit`, `page`, `order_status`, `payment_method`, `channel_id`, `seller_id`, `warehouse_id`, `customer_id`, `start_date`, `end_date`, `order_no`, `customer_email`, `customer_phone`, and `channel_order_id`.
 
@@ -205,7 +213,7 @@ Retrieval tests require a reachable backend.
 
 ## Current limitations
 
-Customer, shipment, and stock modules are placeholders. Product filter compatibility depends on the backend contract. Metrics are not persisted. External dashboards and distributed tracing are not configured. Per-client rate limiting and role-based authorization are not implemented. Write operations are intentionally absent.
+Customer, shipment, and stock modules are placeholders. Product filter compatibility depends on the backend contract. Metrics are not persisted. External dashboards and distributed tracing are not configured. Per-client rate limiting and role-based authorization are not implemented. The order-note write is available only when the guarded write configuration is enabled.
 
 ## Troubleshooting
 

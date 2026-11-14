@@ -1,13 +1,15 @@
+import asyncio
 import copy
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from datetime import datetime
 from datetime import timezone as dt_timezone
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from services.auth_session import get_session
 from services.customer_matching import (
@@ -23,10 +25,136 @@ from services.write_tools import (
     WriteContext,
     WriteError,
     map_backend_error,
+    WriteToolSpec,
 )
 from tools.status_options import ORDER_STATUSES
 
 logger = logging.getLogger(__name__)
+
+_ORDER_WEIGHT_UNITS = frozenset({"GM", "KG", "LB", "OZ"})
+_ORDER_MEASURE_UNITS = frozenset({"MM", "CM", "IN"})
+_ORDER_CURRENCY = re.compile(r"^[A-Z]{3}$")
+_ADDRESS_REQUIRED = frozenset({"name", "phone", "address_line1", "city", "state_or_region", "postal_code", "country_code"})
+_ADDRESS_OPTIONAL = frozenset({"company_legal_name", "email", "address_line2", "address_line3", "county", "district", "municipality", "taxing_region"})
+_ITEM_ALLOWED = frozenset({"name", "quantity_ordered", "item_price", "code", "channel_sku", "item_image", "product_id"})
+
+
+def _finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _validate_create_order_input(args: dict[str, Any], context: WriteContext) -> None:
+    if not context.tenant_id:
+        raise WriteError("AUTH_REQUIRED", "An authenticated tenant is required to create an order.")
+    allowed = {"order_no", "order_date", "seller_id", "channel_id", "billing_address", "shipping_address", "items", "customer_id", "currency", "payment_method", "fulfillment_instruction", "order_weight", "weight_unit_code", "dimension_length", "dimension_breadth", "dimension_height", "measure_unit_code"}
+    forbidden = {"tenantId", "tenant_id", "orderStatus", "order_status", "orderTotal", "order_total", "payment_state", "fulfillment_state"}
+    unknown = set(args) - allowed - {"confirm", "confirmation_token", "idempotency_key"}
+    if unknown or forbidden.intersection(args):
+        raise WriteError("VALIDATION_ERROR", "Unexpected or forbidden create-order field supplied.")
+    for name in ("order_no", "order_date"):
+        if not isinstance(args.get(name), str) or not args[name].strip():
+            raise WriteError("VALIDATION_ERROR", f"{name} must be a non-empty string.")
+    try:
+        datetime.fromisoformat(args["order_date"].replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        raise WriteError("VALIDATION_ERROR", "order_date must be an ISO date string.") from None
+    for name in ("seller_id", "channel_id", "customer_id"):
+        if args.get(name) is not None:
+            try:
+                UUID(args[name].strip())
+            except (ValueError, AttributeError):
+                raise WriteError("VALIDATION_ERROR", f"{name} must be a valid UUID.") from None
+    for name in ("billing_address", "shipping_address"):
+        address = args.get(name)
+        if not isinstance(address, dict):
+            raise WriteError("VALIDATION_ERROR", f"{name} must be an object.")
+        unknown_address = set(address) - _ADDRESS_REQUIRED - _ADDRESS_OPTIONAL
+        if unknown_address or any(not isinstance(address.get(field), str) or not address[field].strip() for field in _ADDRESS_REQUIRED):
+            raise WriteError("VALIDATION_ERROR", f"{name} contains missing, invalid, or unexpected fields.")
+        for field in _ADDRESS_OPTIONAL:
+            if field in address and not isinstance(address[field], str):
+                raise WriteError("VALIDATION_ERROR", f"{name}.{field} must be a string.")
+        if "email" in address and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", address["email"]):
+            raise WriteError("VALIDATION_ERROR", f"{name}.email must be a valid email.")
+    items = args.get("items")
+    if not isinstance(items, list) or not items:
+        raise WriteError("VALIDATION_ERROR", "items must be a non-empty array.")
+    for item in items:
+        if not isinstance(item, dict) or set(item) - _ITEM_ALLOWED:
+            raise WriteError("VALIDATION_ERROR", "Each item contains invalid fields.")
+        if not isinstance(item.get("name"), str) or not item["name"].strip():
+            raise WriteError("VALIDATION_ERROR", "Each item name must be non-empty.")
+        if not _finite_number(item.get("quantity_ordered")) or item["quantity_ordered"] <= 0:
+            raise WriteError("VALIDATION_ERROR", "quantity_ordered must be finite and positive.")
+        if not _finite_number(item.get("item_price")) or item["item_price"] < 0:
+            raise WriteError("VALIDATION_ERROR", "item_price must be finite and non-negative.")
+        for field in ("code", "channel_sku", "item_image"):
+            if field in item and not isinstance(item[field], str):
+                raise WriteError("VALIDATION_ERROR", f"{field} must be a string.")
+        if item.get("product_id") is not None:
+            try:
+                UUID(item["product_id"])
+            except (ValueError, TypeError):
+                raise WriteError("VALIDATION_ERROR", "product_id must be a valid UUID.") from None
+    if args.get("currency") is not None and (not isinstance(args["currency"], str) or not _ORDER_CURRENCY.fullmatch(args["currency"].upper())):
+        raise WriteError("VALIDATION_ERROR", "currency must be a three-letter ISO 4217 code.")
+    for name in ("payment_method", "fulfillment_instruction"):
+        if args.get(name) is not None and not isinstance(args[name], str):
+            raise WriteError("VALIDATION_ERROR", f"{name} must be a string.")
+    for name, allowed_values in (("weight_unit_code", _ORDER_WEIGHT_UNITS), ("measure_unit_code", _ORDER_MEASURE_UNITS)):
+        if args.get(name) is not None and (not isinstance(args[name], str) or args[name].upper() not in allowed_values):
+            raise WriteError("VALIDATION_ERROR", f"{name} is invalid.")
+    if args.get("order_weight") is not None and (not _finite_number(args["order_weight"]) or args["order_weight"] <= 0):
+        raise WriteError("VALIDATION_ERROR", "order_weight must be finite and positive.")
+    for name in ("dimension_length", "dimension_breadth", "dimension_height"):
+        if args.get(name) is not None and (not _finite_number(args[name]) or args[name] <= 0):
+            raise WriteError("VALIDATION_ERROR", f"{name} must be finite and positive.")
+
+
+def _create_order_payload(args: dict[str, Any]) -> dict[str, Any]:
+    mapping = {"order_no": "orderNo", "order_date": "orderDate", "seller_id": "sellerId", "channel_id": "channelId", "customer_id": "customerId", "currency": "currency", "payment_method": "paymentMethod", "fulfillment_instruction": "fulfillmentInstruction", "order_weight": "orderWeight", "weight_unit_code": "weightUnitCode", "dimension_length": "dimensionLength", "dimension_breadth": "dimensionBreadth", "dimension_height": "dimensionHeight", "measure_unit_code": "measureUnitCode"}
+    payload = {backend: args[name] for name, backend in mapping.items() if args.get(name) is not None}
+    payload["billingAddress"] = _create_address_payload(args["billing_address"])
+    payload["shippingAddress"] = _create_address_payload(args["shipping_address"])
+    payload["orderItems"] = [_create_item_payload(item) for item in args["items"]]
+    return payload
+
+
+def _create_address_payload(address: dict[str, Any]) -> dict[str, Any]:
+    mapping = {"name": "name", "phone": "phone", "address_line1": "addressLine1", "city": "city", "state_or_region": "stateOrRegion", "postal_code": "postalCode", "country_code": "countryCode", "company_legal_name": "companyLegalName", "email": "email", "address_line2": "addressLine2", "address_line3": "addressLine3", "county": "county", "district": "district", "municipality": "municipality", "taxing_region": "taxingRegion"}
+    return {backend: address[name] for name, backend in mapping.items() if name in address}
+
+
+def _create_item_payload(item: dict[str, Any]) -> dict[str, Any]:
+    mapping = {"name": "name", "quantity_ordered": "quantityOrdered", "item_price": "itemPrice", "code": "code", "channel_sku": "channelSku", "item_image": "itemImage", "product_id": "productId"}
+    return {backend: item[name] for name, backend in mapping.items() if name in item}
+
+
+async def _load_create_order_target(args: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    _validate_create_order_input(args, context)
+    return {"id": f"create-order:{args['order_no'].strip()}", "reference": args["order_no"].strip()}
+
+
+def _validate_create_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> None:
+    _validate_create_order_input(args, context)
+
+
+def _preview_create_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    items = [{"name": item["name"], "quantity_ordered": item["quantity_ordered"], "item_price": item["item_price"]} for item in args["items"]]
+    estimated_total = sum(item["quantity_ordered"] * item["item_price"] for item in args["items"])
+    return {"summary": f"Create order {target['reference']}", "proposed_changes": {"order_no": target["reference"], "seller_id": args["seller_id"], "channel_id": args["channel_id"], "customer_id": args.get("customer_id"), "items": items, "estimated_total": estimated_total}, "side_effects": ["Creates the order and address records. Address validation may create validation records or an Address Issue tag."], "warnings": ["Payment is not processed, stock is not reserved, and paymentMethod is informational only."]}
+
+
+async def _execute_create_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> Any:
+    return await get_api().async_post("/commerce/orders", _create_order_payload(args), retry=False)
+
+
+CREATE_ORDER_SPEC = WriteToolSpec(
+    name="create_order",
+    description="Preview and, after explicit confirmation, create a PointNXT order. Payment is not processed, stock is not reserved, and tenant identity is derived from the authenticated session.",
+    input_schema={"type": "object", "properties": {"order_no": {"type": "string", "description": "Non-empty order number."}, "order_date": {"type": "string", "description": "ISO order date."}, "seller_id": {"type": "string", "description": "Seller UUID."}, "channel_id": {"type": "string", "description": "Channel UUID."}, "billing_address": {"type": "object", "description": "Required billing address."}, "shipping_address": {"type": "object", "description": "Required shipping address."}, "items": {"type": "array", "description": "Non-empty order item array."}, "customer_id": {"type": "string", "description": "Optional customer UUID."}, "currency": {"type": "string", "description": "Optional ISO 4217 currency."}, "payment_method": {"type": "string", "description": "Informational payment method; payment is not processed."}, "fulfillment_instruction": {"type": "string", "description": "Optional fulfillment instruction."}, "order_weight": {"type": "number", "description": "Optional positive finite weight."}, "weight_unit_code": {"type": "string", "enum": sorted(_ORDER_WEIGHT_UNITS), "description": "Weight unit."}, "dimension_length": {"type": "number", "description": "Positive finite length."}, "dimension_breadth": {"type": "number", "description": "Positive finite breadth."}, "dimension_height": {"type": "number", "description": "Positive finite height."}, "measure_unit_code": {"type": "string", "enum": sorted(_ORDER_MEASURE_UNITS), "description": "Measure unit."}}, "required": ["order_no", "order_date", "seller_id", "channel_id", "billing_address", "shipping_address", "items"]},
+    destructive=True, open_world=False, load_target=_load_create_order_target, validate=_validate_create_order, build_preview=_preview_create_order, execute=_execute_create_order,
+)
 
 
 def get_api() -> PointNXTAPI:
@@ -35,6 +163,358 @@ def get_api() -> PointNXTAPI:
 
 SUPPORTED_ORDER_STATUSES = frozenset(ORDER_STATUSES)
 MAX_ORDER_PAGE_SIZE = 100
+
+
+async def _load_order_note_target(args: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    _validate_order_note_input(args)
+    response = await get_api().async_get(f"/commerce/orders/{args['order_id'].strip()}")
+    order = response.get("data", response) if isinstance(response, dict) else {}
+    if not isinstance(order, dict) or not order.get("id"):
+        raise WriteError("NOT_FOUND", "The order was not found.")
+    return {
+        "id": str(order["id"]),
+        "reference": order.get("orderNo") or str(order["id"]),
+        "version": order.get("version") or order.get("updatedAt") or order.get("updated_at"),
+    }
+
+
+def _validate_order_note_input(args: dict[str, Any]) -> None:
+    order_id, note = args.get("order_id"), args.get("note")
+    if not isinstance(order_id, str):
+        raise WriteError("VALIDATION_ERROR", "order_id must be a valid UUID.")
+    try:
+        UUID(order_id.strip())
+    except ValueError:
+        raise WriteError("VALIDATION_ERROR", "order_id must be a valid UUID.") from None
+    if not isinstance(note, str) or not note.strip():
+        raise WriteError("VALIDATION_ERROR", "note must be a non-empty string.")
+    if len(note.strip()) > 2000:
+        raise WriteError("VALIDATION_ERROR", "note must be at most 2000 characters.")
+
+
+def _validate_order_note(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> None:
+    _validate_order_note_input(args)
+
+
+def _preview_order_note(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    return {
+        "summary": f"Add an internal note to order {target['reference']}",
+        "proposed_changes": {"order_id": target["id"], "note": args["note"].strip()},
+        "side_effects": ["Creates one internal order note in PointNXT."],
+    }
+
+
+async def _execute_order_note(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    response = await get_api().async_post("/commerce/order-note", {"orderId": target["id"], "note": args["note"].strip()}, retry=False)
+    data = response.get("data", response) if isinstance(response, dict) else {}
+    result = {"success": True, "orderId": target["id"], "message": "Order note created successfully."}
+    if isinstance(data, dict) and data.get("id"):
+        result["noteId"] = data["id"]
+    return result
+
+
+async def _load_order_tags_target(args: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    _validate_order_tags_input(args)
+    response = await get_api().async_get(f"/commerce/orders/{args['order_id'].strip()}")
+    order = response.get("data", response) if isinstance(response, dict) else {}
+    if not isinstance(order, dict) or not order.get("id"):
+        raise WriteError("NOT_FOUND", "The order was not found.")
+    return {
+        "id": str(order["id"]),
+        "reference": order.get("orderNo") or str(order["id"]),
+        "version": order.get("version") or order.get("updatedAt") or order.get("updated_at"),
+    }
+
+
+def _validate_order_tags_input(args: dict[str, Any]) -> None:
+    order_id = args.get("order_id")
+    if not isinstance(order_id, str):
+        raise WriteError("VALIDATION_ERROR", "order_id must be a valid UUID.")
+    try:
+        UUID(order_id.strip())
+    except ValueError:
+        raise WriteError("VALIDATION_ERROR", "order_id must be a valid UUID.") from None
+
+    tags = args.get("tags")
+    if not isinstance(tags, list):
+        raise WriteError("VALIDATION_ERROR", "tags must be an array of strings.")
+    if any(not isinstance(tag, str) for tag in tags):
+        raise WriteError("VALIDATION_ERROR", "every tag must be a string.")
+
+
+def _validate_order_tags(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> None:
+    _validate_order_tags_input(args)
+
+
+def _preview_order_tags(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    return {
+        "summary": f"Replace all tags on order {target['reference']}",
+        "proposed_changes": {"order_id": target["id"], "tags": args["tags"]},
+        "side_effects": ["Replaces the complete existing order tag list in PointNXT."],
+        "warnings": ["This operation replaces ALL existing tags; it does not append tags."],
+    }
+
+
+async def _execute_order_tags(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> Any:
+    return await get_api().async_request(
+        "PUT",
+        f"/commerce/orders/{target['id']}/tags",
+        json={"tags": args["tags"]},
+        retry=False,
+    )
+
+
+UPDATE_ORDER_TAGS_SPEC = WriteToolSpec(
+    name="update_order_tags",
+    description=(
+        "Preview and, after explicit confirmation, replace the complete set of tags "
+        "on an existing PointNXT order. This replaces all existing tags; it does not append tags."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "order_id": {"type": "string", "description": "Internal PointNXT order UUID."},
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Complete replacement list of order tag names. Every item must be a string.",
+            },
+        },
+        "required": ["order_id", "tags"],
+    },
+    destructive=True,
+    open_world=False,
+    load_target=_load_order_tags_target,
+    validate=_validate_order_tags,
+    build_preview=_preview_order_tags,
+    execute=_execute_order_tags,
+)
+
+
+async def _load_change_order_status_target(args: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    _validate_change_order_status_input(args)
+    api = get_api()
+    order_response, transitions_response = await asyncio.gather(
+        api.async_get(f"/commerce/orders/{args['order_id'].strip()}"),
+        api.async_get("/commerce/orders/status-transitions"),
+    )
+    order = order_response.get("data", order_response) if isinstance(order_response, dict) else {}
+    if not isinstance(order, dict) or not order.get("id"):
+        raise WriteError("NOT_FOUND", "The order was not found.")
+    current_status = order.get("orderStatus")
+    if not isinstance(current_status, str) or not current_status.strip():
+        raise WriteError("VALIDATION_ERROR", "The order does not have a valid orderStatus.")
+    current_status = current_status.strip().upper()
+    transitions = parse_permitted_transitions(transitions_response)
+    permitted = transitions.get(current_status)
+    requested_status = args["order_status"].strip().upper()
+    if not permitted or requested_status not in permitted:
+        allowed = sorted(permitted or set())
+        raise WriteError(
+            "TRANSITION_NOT_PERMITTED",
+            f"Transition from {current_status} to {requested_status} is not permitted by PointNXT.",
+            details={"current_status": current_status, "requested_status": requested_status, "permitted": allowed},
+        )
+    return {
+        "id": str(order["id"]),
+        "reference": order.get("orderNo") or str(order["id"]),
+        "version": order.get("version") or order.get("updatedAt") or order.get("updated_at"),
+        "current_status": current_status,
+    }
+
+
+def _validate_change_order_status_input(args: dict[str, Any]) -> None:
+    order_id = args.get("order_id")
+    if not isinstance(order_id, str):
+        raise WriteError("VALIDATION_ERROR", "order_id must be a valid UUID.")
+    try:
+        UUID(order_id.strip())
+    except ValueError:
+        raise WriteError("VALIDATION_ERROR", "order_id must be a valid UUID.") from None
+
+    order_status = args.get("order_status")
+    if not isinstance(order_status, str) or not order_status.strip():
+        raise WriteError("VALIDATION_ERROR", "order_status must be a non-empty string.")
+    if order_status.strip().upper() not in SUPPORTED_ORDER_STATUSES:
+        raise WriteError("VALIDATION_ERROR", "order_status is not a valid PointNXT order status.")
+
+    version = args.get("version")
+    if version is not None and (isinstance(version, bool) or not isinstance(version, int) or version < 0):
+        raise WriteError("VALIDATION_ERROR", "version must be a non-negative integer.")
+    for name in ("notes", "cancel_reason"):
+        value = args.get(name)
+        if value is not None and not isinstance(value, str):
+            raise WriteError("VALIDATION_ERROR", f"{name} must be a string when provided.")
+
+
+def _validate_change_order_status(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> None:
+    _validate_change_order_status_input(args)
+
+
+def _preview_change_order_status(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    return {
+        "summary": f"Change order {target['reference']} from {target['current_status']} to {args['order_status'].strip().upper()}",
+        "proposed_changes": {
+            "order_id": target["id"],
+            "order_status": args["order_status"].strip().upper(),
+            **{name: args[name] for name in ("notes", "version", "cancel_reason") if args.get(name) is not None},
+        },
+        "side_effects": ["Updates the order status through PointNXT's backend state machine."],
+        "warnings": ["PointNXT will enforce transition, channel, fulfillment, and version business rules."],
+    }
+
+
+async def _execute_change_order_status(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> Any:
+    payload = {"orderStatus": args["order_status"].strip().upper()}
+    for arg_name, backend_name in (("notes", "notes"), ("version", "version"), ("cancel_reason", "cancelReason")):
+        if args.get(arg_name) is not None:
+            payload[backend_name] = args[arg_name]
+    return await get_api().async_request(
+        "PUT",
+        f"/commerce/orders/{target['id']}",
+        json=payload,
+        retry=False,
+    )
+
+
+CHANGE_ORDER_STATUS_SPEC = WriteToolSpec(
+    name="change_order_status",
+    description=(
+        "Preview and, after explicit confirmation, change an order's status through the "
+        "PointNXT backend state machine. Allowed transitions are fetched from PointNXT; "
+        "backend validation is never bypassed."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "order_id": {"type": "string", "description": "Internal PointNXT order UUID."},
+            "order_status": {"type": "string", "description": "Target PointNXT order status."},
+            "notes": {"type": "string", "description": "Optional status-change notes."},
+            "version": {"type": "integer", "description": "Optional order version for optimistic concurrency."},
+            "cancel_reason": {"type": "string", "description": "Optional cancellation reason."},
+        },
+        "required": ["order_id", "order_status"],
+    },
+    destructive=True,
+    open_world=False,
+    load_target=_load_change_order_status_target,
+    validate=_validate_change_order_status,
+    build_preview=_preview_change_order_status,
+    execute=_execute_change_order_status,
+)
+
+
+_WEIGHT_UNITS = frozenset({"GM", "KG", "LB", "OZ"})
+_MEASURE_UNITS = frozenset({"MM", "CM", "IN"})
+
+
+async def _load_update_order_target(args: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    _validate_update_order_input(args)
+    response = await get_api().async_get(f"/commerce/orders/{args['order_id'].strip()}")
+    order = response.get("data", response) if isinstance(response, dict) else {}
+    if not isinstance(order, dict) or not order.get("id"):
+        raise WriteError("NOT_FOUND", "The order was not found.")
+    version = order.get("version")
+    if version is None:
+        raise WriteError("VALIDATION_ERROR", "The order response did not contain a version.")
+    return {"id": str(order["id"]), "reference": order.get("orderNo") or str(order["id"]), "version": version}
+
+
+def _validate_update_order_input(args: dict[str, Any]) -> None:
+    order_id = args.get("order_id")
+    if not isinstance(order_id, str):
+        raise WriteError("VALIDATION_ERROR", "order_id must be a valid UUID.")
+    try:
+        UUID(order_id.strip())
+    except ValueError:
+        raise WriteError("VALIDATION_ERROR", "order_id must be a valid UUID.") from None
+
+    actual_fields = ("fulfillment_instruction", "order_weight", "dimension_length", "dimension_breadth", "dimension_height")
+    if not any(args.get(name) is not None for name in actual_fields):
+        raise WriteError("VALIDATION_ERROR", "At least one order update field is required.")
+    if args.get("fulfillment_instruction") is not None and not isinstance(args["fulfillment_instruction"], str):
+        raise WriteError("VALIDATION_ERROR", "fulfillment_instruction must be a string.")
+    for name in ("order_weight", "dimension_length", "dimension_breadth", "dimension_height"):
+        value = args.get(name)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0):
+            raise WriteError("VALIDATION_ERROR", f"{name} must be a positive finite number.")
+    for name, allowed in (("weight_unit_code", _WEIGHT_UNITS), ("measure_unit_code", _MEASURE_UNITS)):
+        value = args.get(name)
+        if value is not None and (not isinstance(value, str) or value.upper() not in allowed):
+            raise WriteError("VALIDATION_ERROR", f"{name} must be one of: {', '.join(sorted(allowed))}.")
+
+
+def _validate_update_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> None:
+    _validate_update_order_input(args)
+
+
+def _preview_update_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    fields = ("fulfillment_instruction", "order_weight", "weight_unit_code", "dimension_length", "dimension_breadth", "dimension_height", "measure_unit_code")
+    return {
+        "summary": f"Update order {target['reference']} fulfillment and/or measurements",
+        "proposed_changes": {"order_id": target["id"], **{name: args[name] for name in fields if args.get(name) is not None}},
+        "current_version": target["version"],
+        "side_effects": ["Updates the selected order fields through PointNXT."],
+    }
+
+
+async def _execute_update_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> Any:
+    field_map = {
+        "fulfillment_instruction": "fulfillmentInstruction", "order_weight": "orderWeight", "weight_unit_code": "weightUnitCode",
+        "dimension_length": "dimensionLength", "dimension_breadth": "dimensionBreadth", "dimension_height": "dimensionHeight",
+        "measure_unit_code": "measureUnitCode",
+    }
+    payload = {backend: args[name] for name, backend in field_map.items() if args.get(name) is not None}
+    version = target["version"]
+    payload["version"] = int(version) if isinstance(version, str) and version.isdigit() else version
+    return await get_api().async_request("PUT", f"/commerce/orders/{target['id']}", json=payload, retry=False)
+
+
+UPDATE_ORDER_SPEC = WriteToolSpec(
+    name="update_order",
+    description="Preview and, after explicit confirmation, update approved fulfillment and measurement fields on a PointNXT order. Status, notes, addresses, totals, currency, force, cancelReason, warehouseId, and model-provided version are not accepted.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "order_id": {"type": "string", "description": "Internal PointNXT order UUID."},
+            "fulfillment_instruction": {"type": "string", "description": "Optional fulfillment instruction."},
+            "order_weight": {"type": "number", "description": "Optional positive finite order weight."},
+            "weight_unit_code": {"type": "string", "enum": sorted(_WEIGHT_UNITS), "description": "Optional weight unit: GM, KG, LB, or OZ."},
+            "dimension_length": {"type": "number", "description": "Optional positive finite length."},
+            "dimension_breadth": {"type": "number", "description": "Optional positive finite breadth."},
+            "dimension_height": {"type": "number", "description": "Optional positive finite height."},
+            "measure_unit_code": {"type": "string", "enum": sorted(_MEASURE_UNITS), "description": "Optional measure unit: MM, CM, or IN."},
+        },
+        "required": ["order_id"],
+    },
+    destructive=True,
+    open_world=False,
+    load_target=_load_update_order_target,
+    validate=_validate_update_order,
+    build_preview=_preview_update_order,
+    execute=_execute_update_order,
+    load_target_on_commit=False,
+)
+
+
+ADD_ORDER_NOTE_SPEC = WriteToolSpec(
+    name="add_order_note",
+    description="Preview and, after explicit confirmation, add an internal note to an existing PointNXT order. Use the internal order UUID.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "order_id": {"type": "string", "description": "Internal PointNXT order UUID."},
+            "note": {
+                "type": "string",
+                "format": "free-text",
+                "maxLength": 2000,
+                "description": "Internal order note, maximum 2000 characters.",
+            },
+        },
+        "required": ["order_id", "note"],
+    },
+    destructive=False, open_world=False, load_target=_load_order_note_target, validate=_validate_order_note, build_preview=_preview_order_note, execute=_execute_order_note,
+)
 
 
 def _validate_order_filters(

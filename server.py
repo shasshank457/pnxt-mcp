@@ -54,9 +54,6 @@ from tools.customers import (
     get_customer_context as fetch_customer_context,
 )
 from tools.operations import (
-    add_order_note as execute_add_order_note,
-)
-from tools.operations import (
     get_courier_rates as fetch_courier_rates,
 )
 from tools.operations import (
@@ -66,7 +63,11 @@ from tools.operations import (
     update_support_ticket as execute_update_support_ticket,
 )
 from tools.orders import (
-    confirm_order_status_change as execute_confirm_order_status_change,
+    ADD_ORDER_NOTE_SPEC,
+    CHANGE_ORDER_STATUS_SPEC,
+    CREATE_ORDER_SPEC,
+    UPDATE_ORDER_SPEC,
+    UPDATE_ORDER_TAGS_SPEC,
 )
 from tools.orders import (
     find_stuck_orders as search_stuck_orders,
@@ -97,6 +98,11 @@ from tools.orders import (
 )
 from tools.orders import (
     search_orders as find_orders,
+)
+from tools.products import (
+    CREATE_PRODUCT_SPEC,
+    UPDATE_PRODUCT_CHANNEL_LISTING_SPEC,
+    UPDATE_PRODUCT_SPEC,
 )
 from tools.products import (
     get_inventory_summary as fetch_inventory_summary,
@@ -500,30 +506,6 @@ async def get_order_status_transitions(
     )
 
 
-@mcp.tool(annotations=WRITE_EXTERNAL)
-async def confirm_order_status_change(
-    new_status: RequiredOrderStatus,
-    order_id: Identifier = None,
-    order_reference: Reference = None,
-    reason: Text = None,
-    confirm: ConfirmFlag = False,
-    confirmation_token: Text = None,
-    idempotency_key: Text = None,
-):
-    """Update an order status after validating against backend permitted status transitions. Call with confirm=False (default) to preview proposed transition, validate permissions, and obtain a confirmation token. Call with confirm=True and confirmation_token to safely commit the status change with idempotency and concurrency protection."""
-    return sanitize_public_response(
-        await execute_confirm_order_status_change(
-            new_status=new_status,
-            order_id=order_id,
-            order_reference=order_reference,
-            reason=reason,
-            confirm=confirm,
-            confirmation_token=confirmation_token,
-            idempotency_key=idempotency_key,
-        )
-    )
-
-
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def get_products(
     limit: Limit = 10,
@@ -744,19 +726,6 @@ async def update_support_ticket(
 
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
-async def add_order_note(
-    order_reference: Reference,
-    note: Annotated[str, Field(description="Operational note or customer-related update text.")],
-    visibility: Annotated[str, Field(description="Note visibility: internal or customer.")] = "internal",
-    confirm: ConfirmFlag = False,
-    confirmation_token: Text = None,
-    idempotency_key: Text = None,
-):
-    """Validate an order note request and report the missing persistence endpoint without claiming it was saved."""
-    return await execute_add_order_note(order_reference, note, visibility, confirm, confirmation_token, idempotency_key)
-
-
-@mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def search_returns(
     limit: Limit = 20,
     page: Page = 1,
@@ -907,7 +876,7 @@ def _install_tool_error_boundary() -> None:
         tool.fn = wrapped
 
 
-register_enabled_write_tools(mcp)
+register_enabled_write_tools(mcp, [ADD_ORDER_NOTE_SPEC, UPDATE_ORDER_TAGS_SPEC, CHANGE_ORDER_STATUS_SPEC, UPDATE_ORDER_SPEC, CREATE_PRODUCT_SPEC, UPDATE_PRODUCT_SPEC, UPDATE_PRODUCT_CHANNEL_LISTING_SPEC, CREATE_ORDER_SPEC])
 _install_tool_error_boundary()
 
 

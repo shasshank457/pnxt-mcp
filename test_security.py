@@ -20,10 +20,14 @@ def assert_tool_annotations() -> None:
     assert "authenticate_with_pointnxt" not in names
     assert "login_with_credentials" not in names
     expected_read_only = {name: (True, False, False) for name in names}
-    expected_read_only.update({
-        "confirm_order_status_change": (False, False, False),
-        "assign_courier": (False, False, False),
-    })
+    if "change_order_status" in names:
+        expected_read_only["change_order_status"] = (False, True, False)
+    if "add_order_note" in names:
+        expected_read_only["add_order_note"] = (False, False, False)
+    if "update_order_tags" in names:
+        expected_read_only["update_order_tags"] = (False, True, False)
+    if "assign_courier" in names:
+        expected_read_only["assign_courier"] = (False, False, False)
     for name, (read_only, destructive, open_world) in expected_read_only.items():
         annotations = mcp._tool_manager._tools[name].annotations
         assert annotations is not None, name

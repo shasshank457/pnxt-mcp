@@ -83,27 +83,3 @@ async def update_support_ticket(
     raise unsupported_operation("a support-ticket backend and ticket-update endpoint", action="update_support_ticket")
 
 
-async def add_order_note(
-    order_reference: str,
-    note: str,
-    visibility: str = "internal",
-    confirm: bool = False,
-    confirmation_token: str | None = None,
-    idempotency_key: str | None = None,
-) -> dict[str, Any]:
-    """Validate the order and note visibility, then fail closed without persistence."""
-    optional_text(order_reference, "order_reference", required=True)
-    optional_text(note, "note", required=True)
-    optional_text(visibility, "visibility", required=True)
-    optional_text(confirmation_token, "confirmation_token")
-    optional_text(idempotency_key, "idempotency_key")
-    if visibility.lower() not in {"internal", "customer"}:
-        raise ValueError("visibility must be 'internal' or 'customer'")
-    order_result = await get_order(order_reference)
-    if not order_result.get("found"):
-        raise ValueError("Order was not found")
-    raise unsupported_operation(
-        "an order-note persistence endpoint",
-        action="add_order_note",
-        details={"order_reference": order_reference.strip().lstrip("#"), "visibility": visibility.lower(), "confirmation_required": visibility.lower() == "customer"},
-    )

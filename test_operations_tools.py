@@ -3,12 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from services.tool_errors import StructuredToolError
-from tools.operations import (
-    add_order_note,
-    get_courier_rates,
-    retry_delivery,
-    update_support_ticket,
-)
+from tools.operations import get_courier_rates, retry_delivery, update_support_ticket
 
 
 @pytest.mark.asyncio
@@ -31,12 +26,6 @@ async def test_retry_validates_order_and_requires_confirmation():
 
 
 @pytest.mark.asyncio
-async def test_note_missing_order_is_rejected():
-    with patch("tools.operations.get_order", new=AsyncMock(return_value={"found": False})), pytest.raises(ValueError, match="Order was not found"):
-        await add_order_note("missing", "check shipment")
-
-
-@pytest.mark.asyncio
 async def test_ticket_update_requires_a_field_and_fails_closed():
     with pytest.raises(ValueError, match="at least one"):
         await update_support_ticket("ticket-1")
@@ -45,7 +34,3 @@ async def test_ticket_update_requires_a_field_and_fails_closed():
     assert error.value.code == "UNSUPPORTED_OPERATION"
 
 
-@pytest.mark.asyncio
-async def test_customer_note_requires_supported_visibility():
-    with pytest.raises(ValueError, match="visibility"):
-        await add_order_note("100", "hello", visibility="public")
