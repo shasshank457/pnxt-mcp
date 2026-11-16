@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-POINTNXT_TURNSTILE_SITE_KEY=0x4AAAAAAC_Du_3QfaIWHttc
+POINTNXT_TURNSTILE_SITE_KEY = os.getenv("POINTNXT_TURNSTILE_SITE_KEY", "")
 POINTNXT_BASE_URL = os.getenv("POINTNXT_BASE_URL")
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 POINTNXT_LOGIN_URL = os.getenv("POINTNXT_LOGIN_URL", "https://app.pointnxt.com/login")
