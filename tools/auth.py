@@ -233,73 +233,16 @@ async def logout() -> dict:
 
 
 async def login_with_credentials(
-    email: str, password: str, remember_device: bool = True
-) -> dict:
-    """Authenticate with PointNXT credentials without storing the password."""
-    if not email or not email.strip() or not password:
-        return {"authenticated": False, "error": "Email and password are required."}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(
-                f"{POINTNXT_BASE_URL.rstrip('/')}/auth/login",
-                json={"email": email.strip(), "password": password},
-            )
-            if response.status_code in (401, 403):
-                return {"authenticated": False, "error": "Invalid email or password."}
-            if response.status_code == 400:
-                return {
-                    "authenticated": False,
-                    "error": (
-                        "PointNXT rejected the sign-in request. If this account needs the "
-                        "\"Verify you are human\" check, sign in with an access token instead."
-                    ),
-                }
-            if response.status_code >= 500:
-                return {
-                    "authenticated": False,
-                    "error": "PointNXT backend unavailable.",
-                }
-            response.raise_for_status()
-            payload = response.json()
-            data = payload.get("data", {})
-            if not data.get("accessToken") or not data.get("tenantId"):
-                return {
-                    "authenticated": False,
-                    "error": "Authentication response was missing session information.",
-                }
-            session = create_authenticated_session({"data": data}, "credentials")
-        logger.info("PointNXT credential authentication succeeded")
-        result = session.as_dict()
-        result["tenant_id_present"] = bool(session.get_tenant_id())
-        return result
-    except (httpx.TimeoutException, httpx.ConnectError):
-        return {"authenticated": False, "error": "PointNXT backend unavailable."}
-    except (httpx.HTTPError, ValueError):
-        return {"authenticated": False, "error": "PointNXT authentication failed."}
-
-
-def _jwt_claims(token: str) -> dict:
-    """Read tenant, user and expiry from a JWT payload (no signature check).
-
-    The backend still verifies the token on every API call; this only reads
-    the claims so the MCP session can be set up.
-    """
-    try:
-        part = token.split(".")[1]
-        part += "=" * (-len(part) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(part))
-        return claims if isinstance(claims, dict) else {}
-    except (IndexError, ValueError):
-        return {}
-
-
-async def login_with_credentials(
     email: str,
     password: str,
     remember_device: bool = True,
     turnstile_token: str = "",
 ) -> dict:
-    """Authenticate with PointNXT credentials without storing the password."""
+    """Authenticate with PointNXT credentials without storing the password.
+
+    On live, PointNXT requires a Cloudflare Turnstile token. The MCP sign-in
+    page shows the Turnstile widget and passes its token here.
+    """
     if not email or not email.strip() or not password:
         return {"authenticated": False, "error": "Email and password are required."}
     body = {"email": email.strip(), "password": password}
@@ -347,3 +290,79 @@ async def login_with_credentials(
         return {"authenticated": False, "error": "PointNXT backend unavailable."}
     except (httpx.HTTPError, ValueError):
         return {"authenticated": False, "error": "PointNXT authentication failed."}
+
+
+def _jwt_claims(token: str) -> dict:
+    """Read tenant, user and expiry from a JWT payload (no signature check).
+
+    The backend still verifies the token on every API call; this only reads
+    the claims so the MCP session can be set up.
+    """
+    try:
+        part = token.split(".")[1]
+        part += "=" * (-len(part) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(part))
+        return claims if isinstance(claims, dict) else {}
+    except (IndexError, ValueError):
+        return {}
+
+
+async def login_with_access_token(access_token: str, email: str = "") -> dict:
+    """Sign in with a token (or the whole login response) copied from the PointNXT website.
+
+    Fallback for admins and testing when email/password sign-in is not possible.
+    """
+    access_token = (access_token or "").strip().strip('"')
+    if access_token.lower().startswith("bearer "):
+        access_token = access_token[7:].strip()
+    if not access_token:
+        return {"authenticated": False, "error": "Paste an access token to sign in."}
+
+    full = {}
+    if access_token.startswith("{"):
+        try:
+            parsed = json.loads(access_token)
+            full = parsed.get("data", parsed) if isinstance(parsed, dict) else {}
+            access_token = str(full.get("accessToken", ""))
+        except ValueError:
+            return {"authenticated": False, "error": "Could not read the pasted login response."}
+
+    claims = _jwt_claims(access_token)
+    if not claims.get("tenantId"):
+        return {
+            "authenticated": False,
+            "error": "That doesn't look like a PointNXT access token.",
+        }
+    exp = claims.get("exp")
+    if isinstance(exp, (int, float)) and exp < time.time():
+        return {
+            "authenticated": False,
+            "error": "This access token has expired. Sign in on the website again and copy a new one.",
+        }
+
+    if full:
+        data = dict(full)
+        data["accessToken"] = access_token
+    else:
+        data = {
+            "accessToken": access_token,
+            "tenantId": claims["tenantId"],
+            "membershipId": claims.get("membershipId"),
+            "user": {
+                "id": claims.get("userId"),
+                "email": (email or "").strip() or None,
+            },
+        }
+    if isinstance(exp, (int, float)):
+        data["expiresIn"] = max(int(exp - time.time()), 0)
+
+    try:
+        session = create_authenticated_session({"data": data}, "access_token")
+    except Exception:  # noqa: BLE001 - surface a clean error to the sign-in page
+        logger.warning("PointNXT access-token session creation failed")
+        return {"authenticated": False, "error": "Could not start a session with this access token."}
+
+    logger.info("PointNXT access-token authentication succeeded")
+    result = session.as_dict()
+    result["tenant_id_present"] = bool(session.get_tenant_id())
+    return result
