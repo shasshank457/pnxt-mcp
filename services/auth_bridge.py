@@ -12,12 +12,14 @@ from config import (
     MCP_AUTH_RATE_LIMIT_TRANSACTION,
     MCP_AUTH_RATE_LIMIT_WINDOW,
     MCP_PUBLIC_BASE_URL,
+    POINTNXT_TURNSTILE_SITE_KEY,
 )
 from services import session_store
 from services.request_context import reset_request_key, set_request_key
 
 logger = logging.getLogger(__name__)
 _MAX_LOGIN_BODY = 16 * 1024
+_TURNSTILE_ORIGIN = "https://challenges.cloudflare.com"
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Pragma": "no-cache",
@@ -29,6 +31,16 @@ _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
+# The sign-in page also needs to load the Cloudflare Turnstile widget.
+_LOGIN_PAGE_HEADERS = {
+    **_SECURITY_HEADERS,
+    "Content-Security-Policy": (
+        "default-src 'none'; style-src 'unsafe-inline'; "
+        f"script-src 'unsafe-inline' {_TURNSTILE_ORIGIN}; "
+        f"frame-src {_TURNSTILE_ORIGIN}; connect-src {_TURNSTILE_ORIGIN}; "
+        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    ),
+}
 
 
 def begin(state: str, request_key: str, payload: dict, expires_at: float) -> None:
@@ -37,6 +49,10 @@ def begin(state: str, request_key: str, payload: dict, expires_at: float) -> Non
 
 def login_url(state: str) -> str:
     return f"{MCP_PUBLIC_BASE_URL.rstrip('/')}/auth/login?{urlencode({'state': state})}"
+
+
+def _turnstile_enabled() -> bool:
+    return bool(POINTNXT_TURNSTILE_SITE_KEY)
 
 
 def _page(
@@ -48,9 +64,22 @@ def _page(
     escaped_state = html.escape(state, quote=True)
     escaped_nonce = html.escape(nonce, quote=True)
     error_html = f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
+    if _turnstile_enabled():
+        escaped_site_key = html.escape(POINTNXT_TURNSTILE_SITE_KEY, quote=True)
+        turnstile_script = (
+            f'<script src="{_TURNSTILE_ORIGIN}/turnstile/v0/api.js" async defer></script>'
+        )
+        turnstile_html = (
+            f'<div class="turnstile"><div class="cf-turnstile" '
+            f'data-sitekey="{escaped_site_key}"></div></div>'
+        )
+    else:
+        turnstile_script = ""
+        turnstile_html = ""
     body = f"""<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in to PointNXT</title>
+{turnstile_script}
 <style>
 :root {{ color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0f172a; background: #f7f8fa; }}
 *, *::before, *::after {{ box-sizing: border-box; }}
@@ -72,9 +101,12 @@ input:focus {{ border-color: #7210b8; box-shadow: 0 0 0 3px rgba(114,16,184,.15)
 .password-wrap {{ position: relative; }} .password-wrap input {{ padding-right: 48px; }}
 .toggle-password {{ position: absolute; top: 50%; right: 12px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); border: 0; color: #64748b; background: transparent; cursor: pointer; }}
 .toggle-password svg {{ width: 20px; height: 20px; }}
+.turnstile {{ margin: 24px 0 0; }}
 .divider {{ display: flex; align-items: center; gap: 12px; margin: 32px 0 0; color: #94a3b8; font-size: 14px; }}
 .divider::before, .divider::after {{ content: ""; flex: 1; height: 1px; background: #e5e7eb; }}
 .hint {{ margin: 8px 0 0; color: #64748b; font-size: 13px; }}
+details.token {{ margin: 24px 0 0; color: #64748b; font-size: 14px; }}
+details.token summary {{ cursor: pointer; }}
 .submit {{ display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 48px; margin-top: 32px; border: 0; border-radius: 8px; color: #fff; background: #7210b8; font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }}
 .submit:hover {{ background: #5f0d99; }} .submit:disabled {{ cursor: wait; opacity: .75; }} .submit svg {{ width: 20px; height: 20px; }}
 .support {{ margin: 24px 0 0; text-align: center; font-size: 14px; }} .support span {{ color: #0f172a; text-decoration: underline; text-underline-offset: 3px; }}
@@ -93,9 +125,11 @@ input:focus {{ border-color: #7210b8; box-shadow: 0 0 0 3px rgba(114,16,184,.15)
 <label class="field">Email<input type="email" name="email" autocomplete="username" placeholder="name@example.com"></label>
 <div class="field-row"><label class="field" for="password">Password</label><a class="muted-link" href="https://app.pointnxt.com/login">Forgot password?</a></div>
 <div class="password-wrap"><input id="password" type="password" name="password" autocomplete="current-password"><button class="toggle-password" type="button" aria-label="Show password" data-password-toggle><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z"/><circle cx="12" cy="12" r="2.5"/></svg><svg class="eye-off-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" hidden><path d="m3 3 18 18M10.6 6.2A10.8 10.8 0 0 1 12 6c6 0 9.5 6 9.5 6a16.7 16.7 0 0 1-3.1 3.7M6.7 6.8C3.9 8.2 2.5 12 2.5 12s3.5 6 9.5 6c1.1 0 2.1-.2 3-.5"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div>
-<div class="divider">or</div>
+{turnstile_html}
+<details class="token"><summary>Sign in with an access token instead</summary>
 <label class="field">Access token<input type="password" name="access_token" autocomplete="off" placeholder="Paste token from app.pointnxt.com login"></label>
-<p class="hint">Use this if email and password sign-in fails because of the "Verify you are human" check.</p>
+<p class="hint">For admins and testing. Leave email and password empty when using a token.</p>
+</details>
 <button class="submit" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 5l7 7-7 7M22 12H8"/><path d="M2 12h6"/></svg><span data-submit-label>Sign in</span></button>
 </form>
 <p class="support">Trouble signing in? <span>Contact Support</span></p>
@@ -103,11 +137,11 @@ input:focus {{ border-color: #7210b8; box-shadow: 0 0 0 3px rgba(114,16,184,.15)
 </main><script>const form=document.querySelector('form');const toggle=document.querySelector('[data-password-toggle]');const password=document.getElementById('password');const eye=toggle.querySelector('.eye-icon');const eyeOff=toggle.querySelector('.eye-off-icon');toggle.addEventListener('click',function(){{const shown=password.type==='text';password.type=shown?'password':'text';eye.hidden=!shown;eyeOff.hidden=shown;this.setAttribute('aria-label',shown?'Show password':'Hide password');}});form.addEventListener('submit',function(){{const button=form.querySelector('.submit');button.disabled=true;form.querySelector('[data-submit-label]').textContent='Signing in…';}});</script>
 </body>
 </html>"""
-    headers = _SECURITY_HEADERS
+    headers = _LOGIN_PAGE_HEADERS if _turnstile_enabled() else _SECURITY_HEADERS
     if redirect_uri:
         from services.mcp_oauth import _with_form_action_origin
 
-        headers = _with_form_action_origin(_SECURITY_HEADERS, redirect_uri)
+        headers = _with_form_action_origin(headers, redirect_uri)
     return HTMLResponse(body, headers=headers)
 
 
@@ -154,6 +188,19 @@ async def login_page(request):
     )
 
 
+def _retry_page(state: str, claimed: dict, message: str) -> HTMLResponse:
+    session_store.clear(claimed["request_key"])
+    session_store.release_auth_bridge_transaction(state)
+    next_nonce = secrets.token_urlsafe(32)
+    session_store.set_auth_bridge_nonce(state, next_nonce)
+    return _page(
+        state,
+        next_nonce,
+        message,
+        (claimed.get("payload") or {}).get("redirect_uri"),
+    )
+
+
 async def login_submit(request):
     if not _is_https(request):
         return _error("Secure HTTPS authentication is required.", status_code=400)
@@ -172,6 +219,7 @@ async def login_submit(request):
     email = values.get("email", "")
     password = values.get("password", "")
     access_token = values.get("access_token", "").strip()
+    turnstile_token = values.get("cf-turnstile-response", "").strip()
     if not state or not nonce:
         return _error("Authentication request is invalid.")
     if not access_token and (not email or not password):
@@ -195,6 +243,11 @@ async def login_submit(request):
     if not claimed:
         return _error("Authentication request is invalid or expired.")
 
+    if not access_token and _turnstile_enabled() and not turnstile_token:
+        return _retry_page(
+            state, claimed, 'Please complete the "Verify you are human" check.'
+        )
+
     from tools.auth import login_with_access_token, login_with_credentials
 
     token = set_request_key(claimed["request_key"])
@@ -203,7 +256,9 @@ async def login_submit(request):
             if access_token:
                 result = await login_with_access_token(access_token, email)
             else:
-                result = await login_with_credentials(email, password)
+                result = await login_with_credentials(
+                    email, password, turnstile_token=turnstile_token
+                )
         except Exception:  # noqa: BLE001 - normalize bridge authentication failures
             logger.warning("PointNXT bridge authentication failed")
             result = {"authenticated": False}
@@ -211,15 +266,8 @@ async def login_submit(request):
         reset_request_key(token)
 
     if not result.get("authenticated"):
-        session_store.clear(claimed["request_key"])
-        session_store.release_auth_bridge_transaction(state)
-        next_nonce = secrets.token_urlsafe(32)
-        session_store.set_auth_bridge_nonce(state, next_nonce)
-        return _page(
-            state,
-            next_nonce,
-            result.get("error") or "PointNXT sign-in failed.",
-            (claimed.get("payload") or {}).get("redirect_uri"),
+        return _retry_page(
+            state, claimed, result.get("error") or "PointNXT sign-in failed."
         )
 
     if not session_store.complete_auth_bridge_transaction(state):
