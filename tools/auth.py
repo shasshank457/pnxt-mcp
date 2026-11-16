@@ -294,7 +294,7 @@ def _jwt_claims(token: str) -> dict:
 
 
 async def login_with_access_token(access_token: str, email: str = "") -> dict:
-    """Sign in with an access token copied from a PointNXT website login.
+    """Sign in with a token (or the whole login response) copied from the PointNXT website.
 
     Live /auth/login requires a Cloudflare Turnstile token that the MCP server
     cannot produce, so the user signs in on the website (completing the check)
@@ -305,6 +305,15 @@ async def login_with_access_token(access_token: str, email: str = "") -> dict:
         access_token = access_token[7:].strip()
     if not access_token:
         return {"authenticated": False, "error": "Paste an access token to sign in."}
+
+    full = {}
+    if access_token.startswith("{"):
+        try:
+            parsed = json.loads(access_token)
+            full = parsed.get("data", parsed) if isinstance(parsed, dict) else {}
+            access_token = str(full.get("accessToken", ""))
+        except ValueError:
+            return {"authenticated": False, "error": "Could not read the pasted login response."}
 
     claims = _jwt_claims(access_token)
     if not claims.get("tenantId"):
@@ -319,15 +328,19 @@ async def login_with_access_token(access_token: str, email: str = "") -> dict:
             "error": "This access token has expired. Sign in on the website again and copy a new one.",
         }
 
-    data = {
-        "accessToken": access_token,
-        "tenantId": claims["tenantId"],
-        "membershipId": claims.get("membershipId"),
-        "user": {
-            "id": claims.get("userId"),
-            "email": (email or "").strip() or None,
-        },
-    }
+    if full:
+        data = dict(full)
+        data["accessToken"] = access_token
+    else:
+        data = {
+            "accessToken": access_token,
+            "tenantId": claims["tenantId"],
+            "membershipId": claims.get("membershipId"),
+            "user": {
+                "id": claims.get("userId"),
+                "email": (email or "").strip() or None,
+            },
+        }
     if isinstance(exp, (int, float)):
         data["expiresIn"] = max(int(exp - time.time()), 0)
 
