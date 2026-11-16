@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import json
 import logging
 import secrets
 import time
@@ -245,7 +247,13 @@ async def login_with_credentials(
             if response.status_code in (401, 403):
                 return {"authenticated": False, "error": "Invalid email or password."}
             if response.status_code == 400:
-                return {"authenticated": False, "error": "Backend validation error."}
+                return {
+                    "authenticated": False,
+                    "error": (
+                        "PointNXT rejected the sign-in request. If this account needs the "
+                        "\"Verify you are human\" check, sign in with an access token instead."
+                    ),
+                }
             if response.status_code >= 500:
                 return {
                     "authenticated": False,
@@ -268,3 +276,68 @@ async def login_with_credentials(
         return {"authenticated": False, "error": "PointNXT backend unavailable."}
     except (httpx.HTTPError, ValueError):
         return {"authenticated": False, "error": "PointNXT authentication failed."}
+
+
+def _jwt_claims(token: str) -> dict:
+    """Read tenant, user and expiry from a JWT payload (no signature check).
+
+    The backend still verifies the token on every API call; this only reads
+    the claims so the MCP session can be set up.
+    """
+    try:
+        part = token.split(".")[1]
+        part += "=" * (-len(part) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(part))
+        return claims if isinstance(claims, dict) else {}
+    except (IndexError, ValueError):
+        return {}
+
+
+async def login_with_access_token(access_token: str, email: str = "") -> dict:
+    """Sign in with an access token copied from a PointNXT website login.
+
+    Live /auth/login requires a Cloudflare Turnstile token that the MCP server
+    cannot produce, so the user signs in on the website (completing the check)
+    and pastes the resulting access token here.
+    """
+    access_token = (access_token or "").strip().strip('"')
+    if access_token.lower().startswith("bearer "):
+        access_token = access_token[7:].strip()
+    if not access_token:
+        return {"authenticated": False, "error": "Paste an access token to sign in."}
+
+    claims = _jwt_claims(access_token)
+    if not claims.get("tenantId"):
+        return {
+            "authenticated": False,
+            "error": "That doesn't look like a PointNXT access token.",
+        }
+    exp = claims.get("exp")
+    if isinstance(exp, (int, float)) and exp < time.time():
+        return {
+            "authenticated": False,
+            "error": "This access token has expired. Sign in on the website again and copy a new one.",
+        }
+
+    data = {
+        "accessToken": access_token,
+        "tenantId": claims["tenantId"],
+        "membershipId": claims.get("membershipId"),
+        "user": {
+            "id": claims.get("userId"),
+            "email": (email or "").strip() or None,
+        },
+    }
+    if isinstance(exp, (int, float)):
+        data["expiresIn"] = max(int(exp - time.time()), 0)
+
+    try:
+        session = create_authenticated_session({"data": data}, "access_token")
+    except Exception:  # noqa: BLE001 - surface a clean error to the sign-in page
+        logger.warning("PointNXT access-token session creation failed")
+        return {"authenticated": False, "error": "Could not start a session with this access token."}
+
+    logger.info("PointNXT access-token authentication succeeded")
+    result = session.as_dict()
+    result["tenant_id_present"] = bool(session.get_tenant_id())
+    return result

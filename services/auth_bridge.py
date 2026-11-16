@@ -72,6 +72,9 @@ input:focus {{ border-color: #7210b8; box-shadow: 0 0 0 3px rgba(114,16,184,.15)
 .password-wrap {{ position: relative; }} .password-wrap input {{ padding-right: 48px; }}
 .toggle-password {{ position: absolute; top: 50%; right: 12px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); border: 0; color: #64748b; background: transparent; cursor: pointer; }}
 .toggle-password svg {{ width: 20px; height: 20px; }}
+.divider {{ display: flex; align-items: center; gap: 12px; margin: 32px 0 0; color: #94a3b8; font-size: 14px; }}
+.divider::before, .divider::after {{ content: ""; flex: 1; height: 1px; background: #e5e7eb; }}
+.hint {{ margin: 8px 0 0; color: #64748b; font-size: 13px; }}
 .submit {{ display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 48px; margin-top: 32px; border: 0; border-radius: 8px; color: #fff; background: #7210b8; font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }}
 .submit:hover {{ background: #5f0d99; }} .submit:disabled {{ cursor: wait; opacity: .75; }} .submit svg {{ width: 20px; height: 20px; }}
 .support {{ margin: 24px 0 0; text-align: center; font-size: 14px; }} .support span {{ color: #0f172a; text-decoration: underline; text-underline-offset: 3px; }}
@@ -87,9 +90,12 @@ input:focus {{ border-color: #7210b8; box-shadow: 0 0 0 3px rgba(114,16,184,.15)
 <form method="post" action="/auth/login">
 <input type="hidden" name="state" value="{escaped_state}">
 <input type="hidden" name="nonce" value="{escaped_nonce}">
-<label class="field">Email<input type="email" name="email" autocomplete="username" placeholder="name@example.com" required></label>
+<label class="field">Email<input type="email" name="email" autocomplete="username" placeholder="name@example.com"></label>
 <div class="field-row"><label class="field" for="password">Password</label><a class="muted-link" href="https://app.pointnxt.com/login">Forgot password?</a></div>
-<div class="password-wrap"><input id="password" type="password" name="password" autocomplete="current-password" required><button class="toggle-password" type="button" aria-label="Show password" data-password-toggle><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z"/><circle cx="12" cy="12" r="2.5"/></svg><svg class="eye-off-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" hidden><path d="m3 3 18 18M10.6 6.2A10.8 10.8 0 0 1 12 6c6 0 9.5 6 9.5 6a16.7 16.7 0 0 1-3.1 3.7M6.7 6.8C3.9 8.2 2.5 12 2.5 12s3.5 6 9.5 6c1.1 0 2.1-.2 3-.5"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div>
+<div class="password-wrap"><input id="password" type="password" name="password" autocomplete="current-password"><button class="toggle-password" type="button" aria-label="Show password" data-password-toggle><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z"/><circle cx="12" cy="12" r="2.5"/></svg><svg class="eye-off-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" hidden><path d="m3 3 18 18M10.6 6.2A10.8 10.8 0 0 1 12 6c6 0 9.5 6 9.5 6a16.7 16.7 0 0 1-3.1 3.7M6.7 6.8C3.9 8.2 2.5 12 2.5 12s3.5 6 9.5 6c1.1 0 2.1-.2 3-.5"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div>
+<div class="divider">or</div>
+<label class="field">Access token<input type="password" name="access_token" autocomplete="off" placeholder="Paste token from app.pointnxt.com login"></label>
+<p class="hint">Use this if email and password sign-in fails because of the "Verify you are human" check.</p>
 <button class="submit" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 5l7 7-7 7M22 12H8"/><path d="M2 12h6"/></svg><span data-submit-label>Sign in</span></button>
 </form>
 <p class="support">Trouble signing in? <span>Contact Support</span></p>
@@ -165,8 +171,11 @@ async def login_submit(request):
     nonce = values.get("nonce", "")
     email = values.get("email", "")
     password = values.get("password", "")
-    if not state or not nonce or not email or not password:
-        return _error("Email and password are required.")
+    access_token = values.get("access_token", "").strip()
+    if not state or not nonce:
+        return _error("Authentication request is invalid.")
+    if not access_token and (not email or not password):
+        return _error("Enter your email and password, or paste an access token.")
 
     client_host = request.client.host if request.client else "unknown"
     ip_allowed = session_store.consume_rate_limit(
@@ -186,12 +195,15 @@ async def login_submit(request):
     if not claimed:
         return _error("Authentication request is invalid or expired.")
 
-    from tools.auth import login_with_credentials
+    from tools.auth import login_with_access_token, login_with_credentials
 
     token = set_request_key(claimed["request_key"])
     try:
         try:
-            result = await login_with_credentials(email, password)
+            if access_token:
+                result = await login_with_access_token(access_token, email)
+            else:
+                result = await login_with_credentials(email, password)
         except Exception:  # noqa: BLE001 - normalize bridge authentication failures
             logger.warning("PointNXT bridge authentication failed")
             result = {"authenticated": False}
@@ -206,7 +218,7 @@ async def login_submit(request):
         return _page(
             state,
             next_nonce,
-            "PointNXT sign-in failed.",
+            result.get("error") or "PointNXT sign-in failed.",
             (claimed.get("payload") or {}).get("redirect_uri"),
         )
 
