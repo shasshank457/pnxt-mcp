@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from inspect import Parameter, Signature
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any, Literal, Protocol
 from uuid import uuid4
 
 import httpx
@@ -263,6 +263,9 @@ def _sanitize_arguments(args: dict[str, Any], schema: dict[str, Any]) -> dict[st
     if missing:
         raise WriteError("VALIDATION_ERROR", f"Missing required field(s): {', '.join(missing)}")
     sanitized = dict(args)
+    for name, definition in properties.items():
+        if name not in sanitized and "default" in definition:
+            sanitized[name] = definition["default"]
     for name, value in list(sanitized.items()):
         definition = properties.get(name, {})
         # Optional omitted/null values are intentionally not type-checked.
@@ -282,6 +285,21 @@ def _sanitize_arguments(args: dict[str, Any], schema: dict[str, Any]) -> dict[st
             type_valid = any(type_matches.get(type_name, False) for type_name in expected_type)
         else:
             type_valid = type_matches.get(expected_type, True)
+        if expected_type == "string" and isinstance(value, int) and name in {"sku", "pincode", "phone", "order_reference"}:
+            sanitized[name] = str(value)
+            value = sanitized[name]
+            type_valid = True
+        if expected_type == "array" and isinstance(value, list) and name == "order_references":
+            sanitized[name] = [str(item) if isinstance(item, int) else item for item in value]
+            value = sanitized[name]
+            type_valid = True
+        if expected_type == "array" and isinstance(value, list) and name == "items":
+            sanitized[name] = [
+                {key: str(item_value) if key == "sku" and isinstance(item_value, int) else item_value for key, item_value in item.items()}
+                if isinstance(item, dict) else item
+                for item in value
+            ]
+            value = sanitized[name]
         if expected_type and not type_valid:
             raise WriteError("VALIDATION_ERROR", f"{name} must be a {expected_type}")
         enum = definition.get("enum")
@@ -537,9 +555,31 @@ def register_write_tool(mcp: Any, spec: WriteToolSpec, framework: WriteToolFrame
     })
     parameters = []
     required = set(spec.input_schema.get("required", []))
+    def annotation_for(definition: dict[str, Any], required: bool) -> Any:
+        kind = definition.get("type")
+        if kind == "string":
+            annotation = str | int if definition.get("coerce_numeric_string") else str
+            enum = definition.get("enum")
+            if enum:
+                annotation = Literal[tuple(enum)]
+        elif kind == "integer":
+            annotation = int
+        elif kind == "number":
+            annotation = float
+        elif kind == "boolean":
+            annotation = bool
+        elif kind == "array":
+            item_kind = (definition.get("items") or {}).get("type")
+            annotation = list[str | int] if definition.get("coerce_numeric_items") else (list[str] if item_kind == "string" else list[Any])
+        elif kind == "object":
+            annotation = dict[str, Any]
+        else:
+            annotation = Any
+        return annotation if required else annotation | None
+
     for name, definition in properties.items():
         description = definition.get("description", f"Write-tool parameter {name}.")
-        annotation = Annotated[Any, Field(description=description)]
+        annotation = Annotated[annotation_for(definition, name in required), Field(description=description)]
         default = Parameter.empty if name in required else definition.get("default", None)
         parameters.append(
             Parameter(name, Parameter.KEYWORD_ONLY, annotation=annotation, default=default)

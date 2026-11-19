@@ -39,6 +39,10 @@ def _mask_phone(value: str) -> str:
     return f"******{digits[-4:]}"
 
 
+def _mask_name(value: str) -> str:
+    return f"{value[:1]}***" if value else "***"
+
+
 def sanitize_public_response(value: Any, key: str = "") -> Any:
     """Recursively remove internal fields and mask contact identifiers."""
     normalized_key = key.casefold()
@@ -48,8 +52,14 @@ def sanitize_public_response(value: Any, key: str = "") -> Any:
             child_key = str(name).casefold()
             if child_key in _REMOVED_KEYS:
                 continue
-            if child_key in {"email", "customeremail"} and isinstance(child, str):
+            if child_key in {"email", "customeremail", "username"} and isinstance(child, str) and "@" in child:
                 result[name] = _mask_email(child)
+            elif child_key in {"id", "domain"} and normalized_key == "tenant":
+                result[name] = "***"
+            elif child_key in {"firstname", "lastname"} and isinstance(child, str):
+                result[name] = _mask_name(child)
+            elif child_key == "name" and normalized_key in {"shippingaddress", "billingaddress", "customer", "address"} and isinstance(child, str):
+                result[name] = _mask_name(child)
             elif child_key in {
                 "phone",
                 "customerphone",

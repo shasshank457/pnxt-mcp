@@ -9,7 +9,7 @@ import asyncio
 import hashlib
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from config import PNXT_RETURN_WINDOW_DAYS
 from services.pointnxt_api import PointNXTAPI
@@ -19,6 +19,11 @@ from tools.orders import get_api, parse_permitted_transitions
 _ORDER_LOOKUP = "/commerce/orders"
 _MISSING_STOCK_ENDPOINT = "TODO_CAPTURE_POINTNXT_STOCK_ADJUSTMENT_ENDPOINT"
 _MISSING_RETURN_ENDPOINT = "TODO_CAPTURE_POINTNXT_RETURN_CREATE_ENDPOINT"
+
+
+class ReturnItem(TypedDict):
+    sku: str
+    quantity: int
 
 def _body(response: Any) -> dict[str, Any]:
     value = response.get("data", response) if isinstance(response, dict) else {}
@@ -54,8 +59,8 @@ def _target(order: dict[str, Any]) -> dict[str, Any]:
 
 def _identity_schema() -> dict[str, Any]:
     return {
-        "order_id": {"type": "string", "description": "Internal PointNXT order UUID; use this or order_reference."},
-        "order_reference": {"type": "string", "description": "PointNXT order number, optionally prefixed with #; use this or order_id."},
+        "order_id": {"type": "string", "coerce_numeric_string": True, "description": "Internal PointNXT order UUID; use this or order_reference."},
+        "order_reference": {"type": "string", "coerce_numeric_string": True, "description": "PointNXT order number, optionally prefixed with #; use this or order_id."},
     }
 
 def _require_identity(args: dict[str, Any]) -> None:
@@ -64,14 +69,16 @@ def _require_identity(args: dict[str, Any]) -> None:
 
 async def _load_cancel(args, context):
     _require_identity(args); order = await _resolve(args); status = str(order.get("orderStatus", "")).upper()
-    if status in {"SHIPPED", "IN_TRANSIT", "DELIVERED", "CANCELLED", "RTO", "RETURNED"}:
+    capabilities = order.get("capabilities") or {}
+    if capabilities.get("canCancel") is False or ("canCancel" not in capabilities and status not in {"PENDING", "ON_HOLD", "CONFIRMED"}):
         raise WriteError("VALIDATION_ERROR", f"Order cannot be cancelled while it is {status}.")
     return _target(order)
 def _validate_cancel(args, target, context):
     if not isinstance(args.get("reason"), str) or len(args["reason"].strip()) < 3: raise WriteError("VALIDATION_ERROR", "reason must be at least 3 characters.")
 def _preview_cancel(args, target, context):
     order = target["order"]; warnings = []
-    if str(order.get("paymentMethod", order.get("paymentType", ""))).upper() != "COD": warnings.append("Prepaid order: check refund handling after cancellation.")
+    financial = order.get("financialSummary") or {}
+    if str(order.get("paymentMode", "")).upper() == "PREPAID" or financial.get("isCod") is False: warnings.append("Prepaid order: check refund handling after cancellation.")
     return {"summary": f"Cancel order {target['reference']}", "proposed_changes": {"reason": args["reason"].strip()}, "warnings": warnings}
 async def _execute_cancel(args, target, context):
     return await get_api().async_request("PUT", f"/commerce/orders/{target['id']}", json={"orderStatus":"CANCELLED", "cancelReason":args["reason"].strip()}, retry=False)
@@ -118,7 +125,7 @@ async def _execute_bulk(args,target,context):
     results=[]
     for start in range(0,len(target["ready"]),3): results.extend(await asyncio.gather(*(one(x) for x in target["ready"][start:start+3])))
     return {"updated_count":sum(x["status"]=="updated" for x in results),"failed_count":sum(x["status"]=="failed" for x in results),"results":results,"skipped":target["skipped"]}
-BULK_CHANGE_ORDER_STATUS_SPEC=WriteToolSpec("bulk_change_order_status","Preview and confirm status changes for up to 50 orders with per-order results.",{"type":"object","properties":{"order_references":{"type":"array","description":"One to 50 order numbers; duplicates are ignored."},"order_status":{"type":"string","description":"Target PointNXT order status."},"notes":{"type":"string","description":"Optional note applied to each status change."}},"required":["order_references","order_status"]},True,False,_load_bulk,_validate_bulk,_preview_bulk,_execute_bulk)
+BULK_CHANGE_ORDER_STATUS_SPEC=WriteToolSpec("bulk_change_order_status","Preview and confirm status changes for up to 50 orders with per-order results.",{"type":"object","properties":{"order_references":{"type":"array","coerce_numeric_items":True,"items":{"type":"string"},"description":"One to 50 order numbers; duplicates are ignored."},"order_status":{"type":"string","description":"Target PointNXT order status."},"notes":{"type":"string","description":"Optional note applied to each status change."}},"required":["order_references","order_status"]},True,False,_load_bulk,_validate_bulk,_preview_bulk,_execute_bulk)
 
 _PHONE = re.compile(r"^[6-9]\d{9}$"); _PIN = re.compile(r"^[1-9]\d{5}$")
 async def _load_address(args, context): _require_identity(args); return _target(await _resolve(args))
@@ -128,20 +135,23 @@ def _validate_address(args,target,context):
     if args.get("phone") is not None and not _PHONE.fullmatch(re.sub(r"[ +]","",args["phone"].replace("+91","",1))): raise WriteError("VALIDATION_ERROR","phone must be a 10-digit Indian mobile number.")
     if args.get("pincode") is not None and not _PIN.fullmatch(args["pincode"]): raise WriteError("VALIDATION_ERROR","pincode must be 6 digits and must not start with 0.")
     order=target["order"]; status=str(order.get("orderStatus","")).upper(); shipments=order.get("shipments") or []
-    if any(s.get("awbNo") or s.get("awb") or s.get("trackingNumber") for s in shipments) or order.get("awbNo") or order.get("trackingNumber"): raise WriteError("VALIDATION_ERROR","Shipping address cannot be changed after an AWB or tracking number exists.")
-    if status in {"SHIPPED","IN_TRANSIT","DELIVERED"}: raise WriteError("VALIDATION_ERROR","Shipping address cannot be changed after shipping.")
+    if shipments:
+        if any(s.get("awbNo") or s.get("awb") or s.get("trackingNumber") for s in shipments):
+            raise WriteError("VALIDATION_ERROR", "Shipping address cannot be changed after an AWB or tracking number exists.")
+        raise WriteError("VALIDATION_ERROR","Shipping address cannot be changed after shipping has started.")
+    if status not in {"PENDING","ON_HOLD","CONFIRMED"}: raise WriteError("VALIDATION_ERROR","Shipping address cannot be changed in the current status.")
 def _preview_address(args,target,context):
     old=target["order"].get("shippingAddress") or {}; changes={k:("******"+args[k][-4:] if k=="phone" else args[k]) for k in ("name","phone","address_line1","address_line2","landmark","city","state","pincode") if args.get(k) is not None and args[k]!=old.get(k)}
     return {"summary":f"Update shipping address for {target['reference']}","proposed_changes":changes}
 async def _execute_address(args,target,context):
-    address=dict(target["order"].get("shippingAddress") or {}); address.update({k:v for k,v in args.items() if k in {"name","phone","address_line1","address_line2","landmark","city","state","pincode"} and v is not None}); return await get_api().async_request("PUT",f"/commerce/orders/{target['id']}",json={"shippingAddress":address,"version":target["version"]},retry=False)
-UPDATE_SHIPPING_ADDRESS_SPEC=WriteToolSpec("update_shipping_address","Preview and confirm a shipping-address update before shipping.",{"type":"object","properties":{**_identity_schema(),**{k:{"type":"string","description":f"Optional shipping address {k}."} for k in ("name","phone","address_line1","address_line2","landmark","city","state","pincode")}},"required":[]},True,False,_load_address,_validate_address,_preview_address,_execute_address)
+    address=dict(target["order"].get("shippingAddress") or {}); field_map={"address_line1":"addressLine1","address_line2":"addressLine2","state":"stateOrRegion","pincode":"postalCode","name":"name","phone":"phone","landmark":"landmark","city":"city"}; address.update({field_map[k]:v for k,v in args.items() if k in field_map and v is not None}); return await get_api().async_request("PUT",f"/commerce/orders/{target['id']}",json={"shippingAddress":address,"version":target["version"]},retry=False)
+UPDATE_SHIPPING_ADDRESS_SPEC=WriteToolSpec("update_shipping_address","Preview and confirm a shipping-address update before shipping.",{"type":"object","properties":{**_identity_schema(),**{k:{"type":"string","coerce_numeric_string":True,"description":f"Optional shipping address {k}."} for k in ("name","phone","address_line1","address_line2","landmark","city","state","pincode")}},"required":[]},True,False,_load_address,_validate_address,_preview_address,_execute_address)
 
 def _missing(name, message):
     async def load(args, context): raise WriteError("CAPABILITY_MISSING", message, details={"todo":name,"capture":["URL","HTTP method","payload field names"]})
     return load
 def _noop(*args): return None
-ADJUST_STOCK_SPEC=WriteToolSpec("adjust_stock","Adjust inventory only when the PointNXT stock-adjustment endpoint is confirmed.",{"type":"object","properties":{"sku":{"type":"string","description":"Product SKU."},"warehouse_id":{"type":"string","description":"Warehouse UUID."},"quantity_change":{"type":"integer","description":"Non-zero stock delta from -10000 to 10000."},"reason":{"type":"string","description":"Adjustment reason."},"note":{"type":"string","description":"Optional adjustment note."}},"required":["sku","warehouse_id","quantity_change","reason"]},True,True,_missing(_MISSING_STOCK_ENDPOINT,"PointNXT stock read/adjustment endpoints are not confirmed."),_noop,_noop,_noop)
-CREATE_RETURN_REQUEST_SPEC=WriteToolSpec("create_return_request","Create a return only when the PointNXT return-create endpoint is confirmed.",{"type":"object","properties":{"items":{"type":"array","description":"SKU and positive quantity items."},"reason":{"type":"string","description":"Return reason."},"return_type":{"type":"string","description":"REFUND or EXCHANGE."},**_identity_schema()},"required":["items","reason"]},True,True,_missing(_MISSING_RETURN_ENDPOINT,"PointNXT return creation endpoint is not confirmed."),_noop,_noop,_noop)
+ADJUST_STOCK_SPEC=WriteToolSpec("adjust_stock","Adjust inventory only when the PointNXT stock-adjustment endpoint is confirmed.",{"type":"object","properties":{"sku":{"type":"string","coerce_numeric_string":True,"description":"Product SKU."},"warehouse_id":{"type":"string","description":"Warehouse UUID."},"quantity_change":{"type":"integer","description":"Non-zero stock delta from -10000 to 10000."},"reason":{"type":"string","description":"Adjustment reason."},"note":{"type":"string","description":"Optional adjustment note."}},"required":["sku","warehouse_id","quantity_change","reason"]},True,True,_missing(_MISSING_STOCK_ENDPOINT,"PointNXT stock read/adjustment endpoints are not confirmed."),_noop,_noop,_noop)
+CREATE_RETURN_REQUEST_SPEC=WriteToolSpec("create_return_request","Create a return only when the PointNXT return-create endpoint is confirmed.",{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"sku":{"type":"string"},"quantity":{"type":"integer"}},"required":["sku","quantity"]},"description":"SKU and positive quantity return items."},"reason":{"type":"string","description":"Return reason."},"return_type":{"type":"string","enum":["REFUND","EXCHANGE"],"default":"REFUND","description":"Return settlement type; defaults to REFUND."},**_identity_schema()},"required":["items","reason"]},True,True,_missing(_MISSING_RETURN_ENDPOINT,"PointNXT return creation endpoint is not confirmed."),_noop,_noop,_noop)
 
 ALL_WRITE_TOOLS_V2=(CANCEL_ORDER_SPEC,BULK_CHANGE_ORDER_STATUS_SPEC,EDIT_ORDER_TAGS_SPEC,UPDATE_SHIPPING_ADDRESS_SPEC,ADJUST_STOCK_SPEC,CREATE_RETURN_REQUEST_SPEC)

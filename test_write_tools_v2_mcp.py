@@ -9,6 +9,7 @@ from tools.write_tools_v2 import (
     ADJUST_STOCK_SPEC, BULK_CHANGE_ORDER_STATUS_SPEC, CANCEL_ORDER_SPEC,
     CREATE_RETURN_REQUEST_SPEC, EDIT_ORDER_TAGS_SPEC, UPDATE_SHIPPING_ADDRESS_SPEC,
 )
+from services.response_safety import sanitize_public_response
 from services.write_tools import register_write_tool
 
 ORDER_ID = "11111111-1111-4111-8111-111111111111"
@@ -92,4 +93,28 @@ async def test_capability_tools_fail_closed_through_registered_layer(raw_tool):
         raw_tool(spec)
         result = await server.mcp.call_tool(spec.name, args)
         assert "CAPABILITY_MISSING" in str(result)
+
+@pytest.mark.asyncio
+async def test_registered_tools_coerce_numeric_string_fields_and_default_return_type(raw_tool):
+    api = _api()
+    with patch("tools.write_tools_v2.get_api", return_value=api):
+        raw_tool(EDIT_ORDER_TAGS_SPEC)
+        result = await server.mcp.call_tool("edit_order_tags", {"order_reference": 1643, "add": None, "remove": None})
+    assert result is not None
+    with patch("tools.write_tools_v2.get_api", return_value=api):
+        raw_tool(CREATE_RETURN_REQUEST_SPEC)
+        result = await server.mcp.call_tool("create_return_request", {"order_reference": 1643, "items": [{"sku": 8754, "quantity": 1}], "reason": "damaged"})
+    assert "CAPABILITY_MISSING" in str(result)
+
+def test_read_side_masks_nested_customer_tenant_and_address_without_masking_products():
+    result = sanitize_public_response({
+        "customer": {"username": "alice@example.com", "firstName": "Alice", "lastName": "Jones"},
+        "tenant": {"id": "tenant-1", "domain": "tenant.example.com"},
+        "shippingAddress": {"name": "Alice Jones", "addressLine1": "Keep Street"},
+        "product": {"name": "Widget"},
+    })
+    assert result["customer"] == {"username": "a***@example.com", "firstName": "A***", "lastName": "J***"}
+    assert result["tenant"] == {"id": "***", "domain": "***"}
+    assert result["shippingAddress"]["name"] == "A***"
+    assert result["product"]["name"] == "Widget"
 
