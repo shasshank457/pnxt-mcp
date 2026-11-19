@@ -217,12 +217,13 @@ async def _enrich_order_items(args: dict[str, Any]) -> None:
         code = normalized.get("code") or normalized.get("channelSku")
         if not code or normalized.get("productId"):
             continue
-        response = await api.async_get("/commerce/products", params={"limit": 20, "page": 1, "sku": str(code)})
+        # Keep this request identical to search_products/get_products defaults.
+        response = await api.async_get("/commerce/products", params={"limit": 10, "page": 1, "sku": str(code)})
         data = response.get("data", response) if isinstance(response, dict) else {}
         products = data.get("items", []) if isinstance(data, dict) else []
         matches = [product for product in products if str(product.get("sku") or product.get("code") or "").casefold() == str(code).casefold()]
         if not matches:
-            raise WriteError("NOT_FOUND", f"No product found for SKU {code}.")
+            raise WriteError("NOT_FOUND", f"Unknown SKU: {code}")
         product = matches[0]
         item["code"] = str(product.get("sku") or product.get("code") or code)
         if not item.get("name") and product.get("name"):

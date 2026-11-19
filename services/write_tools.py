@@ -353,9 +353,14 @@ def map_backend_error(error: BaseException, request_id: str) -> WriteError:
             message = f"Backend endpoint not found: {method} {path}"
         try:
             payload = response.json() if response is not None else {}
-            message = payload.get("message") or payload.get("error") or message
+            body_message = payload.get("message") or payload.get("error") if isinstance(payload, dict) else None
+            message = body_message or (response.text if response is not None else message) or message
         except Exception:
             payload = {}
+            message = getattr(response, "text", "") or message
+        if response is not None and request is not None and status in {400, 404, 422}:
+            path = getattr(getattr(request, "url", None), "path", "[unknown]")
+            message = f"{message} ({request.method} {path})"
         if response is not None:
             logger.warning(
                 "PointNXT write request failed url=%s status=%s body=%s",
