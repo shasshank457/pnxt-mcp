@@ -16,6 +16,10 @@ _REMOVED_KEYS = frozenset(
         "address_1",
         "address_2",
         "shippingaddresssnapshot",
+        "addressline1",
+        "addressline2",
+        "landmark",
+        "gstin",
     }
 )
 _HTML_TAG = re.compile(r"<[^>]*>")
@@ -32,7 +36,7 @@ def _mask_phone(value: str) -> str:
     digits = "".join(character for character in value if character.isdigit())
     if len(digits) < 3:
         return "***"
-    return f"***{digits[-2:]}"
+    return f"******{digits[-4:]}"
 
 
 def sanitize_public_response(value: Any, key: str = "") -> Any:

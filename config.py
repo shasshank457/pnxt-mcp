@@ -66,12 +66,13 @@ PNXT_WRITE_TOOLS_ALLOWLIST = tuple(
     for name in os.getenv("PNXT_WRITE_TOOLS_ALLOWLIST", "").split(",")
     if name.strip()
 )
-PNXT_CONFIRMATION_SECRET = os.getenv("PNXT_CONFIRMATION_SECRET", "")
+PNXT_CONFIRMATION_SECRET = os.getenv("PNXT_CONFIRM_SECRET", os.getenv("PNXT_CONFIRMATION_SECRET", ""))
 PNXT_CONFIRMATION_TTL_SECONDS = int(os.getenv("PNXT_CONFIRMATION_TTL_SECONDS", "300"))
 PNXT_WRITE_TIMEOUT_SECONDS = int(os.getenv("PNXT_WRITE_TIMEOUT_SECONDS", "30"))
 PNXT_WRITE_FREE_TEXT_MAX_LENGTH = int(
     os.getenv("PNXT_WRITE_FREE_TEXT_MAX_LENGTH", "1000")
 )
+PNXT_RETURN_WINDOW_DAYS = int(os.getenv("PNXT_RETURN_WINDOW_DAYS", "30"))
 
 
 def validate_mcp_oauth_configuration() -> None:

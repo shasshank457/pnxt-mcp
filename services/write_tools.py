@@ -309,15 +309,24 @@ def _backend_status(error: BaseException) -> int | None:
 def map_backend_error(error: BaseException, request_id: str) -> WriteError:
     status = _backend_status(error)
     code_by_status = {
-        400: "VALIDATION_ERROR",
-        401: "AUTH_REQUIRED",
-        403: "NOT_PERMITTED",
+        400: "VALIDATION_FAILED",
+        401: "SIGNED_OUT",
+        403: "FORBIDDEN",
         404: "NOT_FOUND",
         409: "CONFLICT",
-        422: "BUSINESS_RULE_VIOLATION",
+        422: "VALIDATION_FAILED",
     }
     if status in code_by_status:
-        return WriteError(code_by_status[status], "PointNXT rejected the write request.", request_id=request_id)
+        message = "PointNXT rejected the write request."
+        if status == 401:
+            message = "Your PointNXT session has expired. Reconnect pnxt-mcp in Claude and try again."
+        response = getattr(error, "response", None)
+        try:
+            payload = response.json() if response is not None else {}
+            message = payload.get("message") or payload.get("error") or message
+        except Exception:
+            pass
+        return WriteError(code_by_status[status], message, request_id=request_id)
     if status is not None and status >= 500:
         return WriteError("BACKEND_ERROR", "PointNXT is temporarily unavailable.", retryable=True, request_id=request_id)
     if isinstance(error, (TimeoutError, httpx.TimeoutException)):
