@@ -29,6 +29,13 @@ async def _resolve(args: dict[str, Any]) -> dict[str, Any]:
     api = get_api()
     if order_id:
         order = _body(await api.async_get(f"/commerce/orders/{order_id.strip()}"))
+        if reference:
+            ref_value = str(reference).strip().lstrip("#")
+            result = await api.async_get(_ORDER_LOOKUP, params={"orderNo": ref_value})
+            data = result.get("data", result) if isinstance(result, dict) else {}
+            items = data.get("items", []) if isinstance(data, dict) else []
+            if items and str(items[0].get("id")) != str(order.get("id")):
+                raise WriteError("INVALID_INPUT", "order_id and order_reference resolve to different orders.")
     else:
         reference = str(reference).strip().lstrip("#")
         result = await api.async_get(_ORDER_LOOKUP, params={"orderNo": reference})
@@ -52,8 +59,8 @@ def _identity_schema() -> dict[str, Any]:
     }
 
 def _require_identity(args: dict[str, Any]) -> None:
-    if bool(args.get("order_id")) == bool(args.get("order_reference")):
-        raise WriteError("VALIDATION_ERROR", "Provide exactly one of order_id or order_reference.")
+    if not args.get("order_id") and not args.get("order_reference"):
+        raise WriteError("INVALID_INPUT", "Give order_id or order_reference.")
 
 async def _load_cancel(args, context):
     _require_identity(args); order = await _resolve(args); status = str(order.get("orderStatus", "")).upper()
@@ -75,11 +82,12 @@ async def _load_tags(args, context):
     _require_identity(args); order = await _resolve(args); return _target(order)
 def _validate_tags(args, target, context):
     for key in ("add", "remove"):
-        if not isinstance(args.get(key, []), list) or any(not isinstance(v, str) or not v.strip() for v in args.get(key, [])): raise WriteError("VALIDATION_ERROR", f"{key} must be an array of non-empty strings.")
+        values = args.get(key) or []
+        if not isinstance(values, list) or any(not isinstance(v, str) or not v.strip() for v in values): raise WriteError("VALIDATION_ERROR", f"{key} must be an array of non-empty strings.")
 def _preview_tags(args, target, context):
-    current = list(target["order"].get("tags") or []); removed = {v.casefold() for v in args.get("remove", [])}; result = [v for v in current if str(v).casefold() not in removed]
+    current = list(target["order"].get("tags") or []); removed = {v.casefold() for v in (args.get("remove") or [])}; result = [v for v in current if str(v).casefold() not in removed]
     seen = {str(v).casefold() for v in result}
-    for value in args.get("add", []):
+    for value in (args.get("add") or []):
         if value.casefold() not in seen: result.append(value); seen.add(value.casefold())
     if result == current: return {"summary":"No tag changes required.","proposed_changes":{"before":current,"after":result},"warnings":["NO_CHANGE"]}
     return {"summary":f"Edit tags on order {target['reference']}","proposed_changes":{"before":current,"after":result}}

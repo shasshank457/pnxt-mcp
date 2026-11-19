@@ -265,10 +265,11 @@ def _sanitize_arguments(args: dict[str, Any], schema: dict[str, Any]) -> dict[st
     sanitized = dict(args)
     for name, value in list(sanitized.items()):
         definition = properties.get(name, {})
-        expected_type = definition.get("type")
-        if value is None and definition.get("nullable"):
-            sanitized[name] = value
+        # Optional omitted/null values are intentionally not type-checked.
+        # Business validators decide whether null has a domain-specific meaning.
+        if value is None:
             continue
+        expected_type = definition.get("type")
         type_matches = {
             "string": isinstance(value, str),
             "integer": isinstance(value, int) and not isinstance(value, bool),
