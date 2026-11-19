@@ -36,6 +36,7 @@ from config import (
     validate_write_configuration,
 )
 from services.auth_session import get_session
+from services.response_safety import sanitize_public_response
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +437,9 @@ class WriteToolFramework:
             if stored:
                 if stored["args_hash"] != args_hash:
                     raise WriteError("IDEMPOTENCY_CONFLICT", "The idempotency key was used with different arguments.", request_id=context.request_id)
-                return stored["result"]
+                replay = dict(stored["result"])
+                replay["replayed"] = True
+                return sanitize_public_response(replay)
 
         token_payload = self.tokens.verify(token)
         if token_payload.get("tool") != spec.name or token_payload.get("user_id") != context.user_id or token_payload.get("tenant_id") != context.tenant_id:
@@ -446,7 +449,7 @@ class WriteToolFramework:
         if confirm and not spec.load_target_on_commit:
             target["version"] = token_payload.get("target_version")
         if token_payload.get("target_id") != _target_id(target) or token_payload.get("target_version") != _target_version(target):
-            raise WriteError("RECORD_CHANGED", "The target changed since preview; request a new preview.", request_id=context.request_id)
+            raise WriteError("STALE_PREVIEW", "The record changed since preview; request a new preview.", request_id=context.request_id)
         if not self.state_store.consume_nonce(token_payload["nonce"], token_payload["expires_at"]):
             raise WriteError("TOKEN_USED", "The confirmation token has already been used.", request_id=context.request_id)
 
@@ -461,7 +464,7 @@ class WriteToolFramework:
             raise mapped from error
 
         audit_id = str(uuid4())
-        committed = {"status": "committed", "result": result, "audit_id": audit_id}
+        committed = {"status": "committed", "result": sanitize_public_response(result), "audit_id": audit_id}
         key = idempotency_key or token_payload["nonce"]
         self.state_store.put_idempotency(
             context.user_id,

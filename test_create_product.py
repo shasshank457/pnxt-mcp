@@ -91,7 +91,7 @@ async def test_create_product_token_reuse_and_idempotency():
         commit = {**args(), "confirm": True, "confirmation_token": preview["confirmation_token"], "idempotency_key": "product-key"}
         first = await framework.invoke(CREATE_PRODUCT_SPEC, commit, context)
         second = await framework.invoke(CREATE_PRODUCT_SPEC, commit, context)
-        assert first == second
+        assert second == {**first, "replayed": True}
         with pytest.raises(WriteError) as replay:
             await framework.invoke(CREATE_PRODUCT_SPEC, {**args(), "confirm": True, "confirmation_token": preview["confirmation_token"]}, context)
     assert replay.value.code == "TOKEN_USED"
@@ -99,7 +99,7 @@ async def test_create_product_token_reuse_and_idempotency():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,code", [(400, "VALIDATION_ERROR"), (404, "NOT_FOUND"), (401, "AUTH_REQUIRED")])
+@pytest.mark.parametrize("status,code", [(400, "VALIDATION_FAILED"), (404, "NOT_FOUND"), (401, "SIGNED_OUT")])
 async def test_create_product_backend_errors(status, code):
     api = make_api()
     api.async_post = AsyncMock(side_effect=httpx.HTTPStatusError("backend", request=httpx.Request("POST", "https://example.test"), response=httpx.Response(status)))

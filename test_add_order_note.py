@@ -107,7 +107,7 @@ async def test_add_order_note_maps_backend_error_and_timeout():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,code",
-    [(400, "VALIDATION_ERROR"), (401, "AUTH_REQUIRED"), (404, "NOT_FOUND")],
+        [(400, "VALIDATION_FAILED"), (401, "SIGNED_OUT"), (404, "NOT_FOUND")],
 )
 async def test_add_order_note_maps_client_backend_errors(status, code):
     error = httpx.HTTPStatusError(
@@ -152,7 +152,7 @@ async def test_add_order_note_idempotency_replays_without_second_post():
         }
         first = await framework.invoke(ADD_ORDER_NOTE_SPEC, args, context)
         replay = await framework.invoke(ADD_ORDER_NOTE_SPEC, args, context)
-    assert replay == first
+    assert replay == {**first, "replayed": True}
     api.async_post.assert_awaited_once()
 
 
@@ -266,5 +266,5 @@ async def test_update_order_tags_idempotency_replays_without_second_put():
         args = {"order_id": ORDER_ID, "tags": ["A"], "confirm": True, "confirmation_token": preview["confirmation_token"], "idempotency_key": "tag-key"}
         first = await framework.invoke(UPDATE_ORDER_TAGS_SPEC, args, context)
         second = await framework.invoke(UPDATE_ORDER_TAGS_SPEC, args, context)
-    assert second == first
+    assert second == {**first, "replayed": True}
     api.async_request.assert_awaited_once()

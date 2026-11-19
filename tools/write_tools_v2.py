@@ -127,7 +127,7 @@ def _preview_address(args,target,context):
     return {"summary":f"Update shipping address for {target['reference']}","proposed_changes":changes}
 async def _execute_address(args,target,context):
     address=dict(target["order"].get("shippingAddress") or {}); address.update({k:v for k,v in args.items() if k in {"name","phone","address_line1","address_line2","landmark","city","state","pincode"} and v is not None}); return await get_api().async_request("PUT",f"/commerce/orders/{target['id']}",json={"shippingAddress":address,"version":target["version"]},retry=False)
-UPDATE_SHIPPING_ADDRESS_SPEC=WriteToolSpec("update_shipping_address","Preview and confirm a shipping-address update before shipping.",{"type":"object","properties":{**_identity_schema(),**{k:{"type":"string","description":f"Optional shipping address {k}."} for k in ("name","phone","address_line1","address_line2","landmark","city","state","pincode")}},"required":[]},True,False,_load_address,_validate_address,_preview_address,_execute_address,load_target_on_commit=False)
+UPDATE_SHIPPING_ADDRESS_SPEC=WriteToolSpec("update_shipping_address","Preview and confirm a shipping-address update before shipping.",{"type":"object","properties":{**_identity_schema(),**{k:{"type":"string","description":f"Optional shipping address {k}."} for k in ("name","phone","address_line1","address_line2","landmark","city","state","pincode")}},"required":[]},True,False,_load_address,_validate_address,_preview_address,_execute_address)
 
 def _missing(name, message):
     async def load(args, context): raise WriteError("CAPABILITY_MISSING", message, details={"todo":name,"capture":["URL","HTTP method","payload field names"]})

@@ -86,7 +86,7 @@ async def test_create_order_confirmation_scope_reuse_and_idempotency():
         commit = {**valid_args(), "confirm": True, "confirmation_token": preview["confirmation_token"], "idempotency_key": "same"}
         first = await framework.invoke(CREATE_ORDER_SPEC, commit, context)
         second = await framework.invoke(CREATE_ORDER_SPEC, commit, context)
-        assert first == second
+        assert second == {**first, "replayed": True}
         with pytest.raises(WriteError) as replay:
             await framework.invoke(CREATE_ORDER_SPEC, {**valid_args(), "confirm": True, "confirmation_token": preview["confirmation_token"]}, context)
         with pytest.raises(WriteError):
@@ -96,7 +96,7 @@ async def test_create_order_confirmation_scope_reuse_and_idempotency():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,code", [(400, "VALIDATION_ERROR"), (404, "NOT_FOUND"), (409, "CONFLICT"), (401, "AUTH_REQUIRED")])
+@pytest.mark.parametrize("status,code", [(400, "VALIDATION_FAILED"), (404, "NOT_FOUND"), (409, "CONFLICT"), (401, "SIGNED_OUT")])
 async def test_create_order_backend_errors(status, code):
     api = make_api()
     api.async_post = AsyncMock(side_effect=httpx.HTTPStatusError("backend", request=httpx.Request("POST", "https://example.test"), response=httpx.Response(status)))

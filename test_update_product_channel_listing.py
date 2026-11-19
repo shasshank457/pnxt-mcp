@@ -109,7 +109,7 @@ async def test_listing_selection_change_invalidates_commit():
         preview = await framework.invoke(UPDATE_PRODUCT_CHANNEL_LISTING_SPEC, {"product_id": PRODUCT_ID, "channel_id": CHANNEL_ID, "allocation": 1}, context)
         with pytest.raises(WriteError) as raised:
             await framework.invoke(UPDATE_PRODUCT_CHANNEL_LISTING_SPEC, {"product_id": PRODUCT_ID, "channel_id": CHANNEL_ID, "allocation": 1, "confirm": True, "confirmation_token": preview["confirmation_token"]}, context)
-    assert raised.value.code == "RECORD_CHANGED"
+    assert raised.value.code == "STALE_PREVIEW"
     api.async_request.assert_not_awaited()
 
 
@@ -123,7 +123,7 @@ async def test_listing_confirmation_idempotency_and_backend_error():
         commit = {"product_id": PRODUCT_ID, "channel_id": CHANNEL_ID, "allocation": 1, "confirm": True, "confirmation_token": preview["confirmation_token"], "idempotency_key": "listing-key"}
         first = await framework.invoke(UPDATE_PRODUCT_CHANNEL_LISTING_SPEC, commit, context)
         second = await framework.invoke(UPDATE_PRODUCT_CHANNEL_LISTING_SPEC, commit, context)
-        assert first == second
+        assert second == {**first, "replayed": True}
         with pytest.raises(WriteError) as replay:
             await framework.invoke(UPDATE_PRODUCT_CHANNEL_LISTING_SPEC, {"product_id": PRODUCT_ID, "channel_id": CHANNEL_ID, "allocation": 1, "confirm": True, "confirmation_token": preview["confirmation_token"]}, context)
     assert replay.value.code == "TOKEN_USED"

@@ -64,7 +64,7 @@ async def test_update_order_confirmation_token_reuse_and_idempotency():
         args = {"order_id": ORDER_ID, "fulfillment_instruction": "Pack carefully", "confirm": True, "confirmation_token": preview["confirmation_token"], "idempotency_key": "update-key"}
         first = await framework.invoke(UPDATE_ORDER_SPEC, args, context)
         second = await framework.invoke(UPDATE_ORDER_SPEC, args, context)
-        assert first == second
+        assert second == {**first, "replayed": True}
         with pytest.raises(WriteError) as replay:
             await framework.invoke(UPDATE_ORDER_SPEC, {"order_id": ORDER_ID, "fulfillment_instruction": "Pack carefully", "confirm": True, "confirmation_token": preview["confirmation_token"]}, context)
     assert replay.value.code == "TOKEN_USED"
@@ -72,7 +72,7 @@ async def test_update_order_confirmation_token_reuse_and_idempotency():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,code", [(400, "VALIDATION_ERROR"), (404, "NOT_FOUND"), (409, "CONFLICT"), (401, "AUTH_REQUIRED")])
+@pytest.mark.parametrize("status,code", [(400, "VALIDATION_FAILED"), (404, "NOT_FOUND"), (409, "CONFLICT"), (401, "SIGNED_OUT")])
 async def test_update_order_backend_errors(status, code):
     api = make_api()
     api.async_request = AsyncMock(side_effect=httpx.HTTPStatusError("backend", request=httpx.Request("PUT", "https://example.test"), response=httpx.Response(status)))

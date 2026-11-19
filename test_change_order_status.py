@@ -89,7 +89,7 @@ async def test_change_order_status_confirmation_token_and_idempotency():
         args = {"order_id": ORDER_ID, "order_status": "CONFIRMED", "confirm": True, "confirmation_token": preview["confirmation_token"], "idempotency_key": "status-key"}
         first = await framework.invoke(CHANGE_ORDER_STATUS_SPEC, args, context)
         second = await framework.invoke(CHANGE_ORDER_STATUS_SPEC, args, context)
-        assert second == first
+        assert second == {**first, "replayed": True}
         assert api.async_request.await_count == 1
         with pytest.raises(WriteError) as replay:
             await framework.invoke(CHANGE_ORDER_STATUS_SPEC, {"order_id": ORDER_ID, "order_status": "CONFIRMED", "confirm": True, "confirmation_token": preview["confirmation_token"]}, context)
@@ -97,7 +97,7 @@ async def test_change_order_status_confirmation_token_and_idempotency():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,code", [(400, "VALIDATION_ERROR"), (409, "CONFLICT")])
+@pytest.mark.parametrize("status,code", [(400, "VALIDATION_FAILED"), (409, "CONFLICT")])
 async def test_change_order_status_maps_backend_errors(status, code):
     api = api_with_transition()
     api.async_request = AsyncMock(side_effect=httpx.HTTPStatusError("backend", request=httpx.Request("PUT", "https://example.test"), response=httpx.Response(status)))

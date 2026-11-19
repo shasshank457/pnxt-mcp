@@ -153,7 +153,7 @@ async def test_get_order_details_by_id_returns_complete_sanitized_order():
     assert order["orderItems"][0]["sku"] == "WH-100"
     # Ensure PII is masked
     assert order["customer"]["email"] == "a***@example.com"
-    assert order["customer"]["phone"] == "***10"
+    assert order["customer"]["phone"] == "******3210"
     # Ensure internal config and tenantId are removed
     assert "tenantId" not in order
     assert "config" not in order

@@ -108,7 +108,7 @@ async def test_args_record_change_and_token_reuse_are_rejected(enabled_writes, c
     version["value"] = "v2"
     with pytest.raises(WriteError) as error:
         await framework.invoke(spec, {"target_id": "order-1", "confirm": True, "confirmation_token": preview["confirmation_token"]}, context)
-    assert error.value.code == "RECORD_CHANGED"
+    assert error.value.code == "STALE_PREVIEW"
 
     version["value"] = "v1"
     committed = await framework.invoke(spec, {"target_id": "order-1", "confirm": True, "confirmation_token": preview["confirmation_token"]}, context)
@@ -127,7 +127,7 @@ async def test_idempotency_replays_same_result_and_rejects_changed_args(enabled_
     args = {"target_id": "order-1", "confirm": True, "confirmation_token": preview["confirmation_token"], "idempotency_key": "same-key"}
     first = await framework.invoke(spec, args, context)
     replay = await framework.invoke(spec, args, context)
-    assert replay == first
+    assert replay == {**first, "replayed": True}
     execute.assert_awaited_once()
 
     second_preview = await framework.invoke(spec, {"target_id": "order-1"}, context)
@@ -137,7 +137,7 @@ async def test_idempotency_replays_same_result_and_rejects_changed_args(enabled_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,code", [(400, "VALIDATION_ERROR"), (401, "AUTH_REQUIRED"), (403, "NOT_PERMITTED"), (404, "NOT_FOUND"), (409, "CONFLICT"), (422, "BUSINESS_RULE_VIOLATION"), (500, "BACKEND_ERROR")])
+@pytest.mark.parametrize("status,code", [(400, "VALIDATION_FAILED"), (401, "SIGNED_OUT"), (403, "FORBIDDEN"), (404, "NOT_FOUND"), (409, "CONFLICT"), (422, "VALIDATION_FAILED"), (500, "BACKEND_ERROR")])
 async def test_backend_statuses_are_structured(enabled_writes, context, status, code):
     error = httpx.HTTPStatusError("backend", request=httpx.Request("POST", "https://example.test"), response=httpx.Response(status))
     framework = WriteToolFramework(secret="x" * 32)

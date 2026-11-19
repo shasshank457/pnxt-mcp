@@ -666,16 +666,16 @@ async def find_untracked_shipments(
 
 @mcp.tool(annotations=WRITE_EXTERNAL)
 async def assign_courier(
-    order_id: Text = None,
-    order_reference: Text = None,
-    shipment_id: Identifier = None,
-    courier_id: CourierIdentifier = None,
-    courier_name: CourierName = None,
-    service_type: ServiceType = None,
-    reason: Text = None,
-    confirm: ConfirmFlag = False,
-    confirmation_token: Text = None,
-    idempotency_key: Text = None,
+    order_id: Annotated[str | None, Field(description="Internal PointNXT order UUID.")] = None,
+    order_reference: Annotated[str | None, Field(description="PointNXT order number, optionally prefixed with #.")] = None,
+    shipment_id: Annotated[str | None, Field(description="Shipment UUID to assign the courier to.")] = None,
+    courier_id: Annotated[str | None, Field(description="Courier UUID to assign.")] = None,
+    courier_name: Annotated[str | None, Field(description="Courier name when a courier UUID is unavailable.")] = None,
+    service_type: Annotated[str | None, Field(description="Courier service type to use.")] = None,
+    reason: Annotated[str | None, Field(description="Reason for assigning or changing the courier.")] = None,
+    confirm: Annotated[bool, Field(description="Commit the previously previewed courier assignment.")] = False,
+    confirmation_token: Annotated[str | None, Field(description="Signed token returned by the courier-assignment preview.")] = None,
+    idempotency_key: Annotated[str | None, Field(description="Stable key used to safely retry the same courier-assignment commit.")] = None,
 ):
     """Assign an eligible courier to a shipment through the actual backend-supported workflow. Validates shipment state, enforces authentication, verifies courier eligibility, and runs a two-phase confirmation protocol with version concurrency and duplicate-assignment idempotency protection. If courier assignment is unsupported by the backend, reports the exact missing capability without simulating success."""
     return await execute_assign_courier(
@@ -706,12 +706,12 @@ async def get_courier_rates(
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def retry_delivery(
-    order_reference: Reference,
-    shipment_id: Identifier = None,
-    reason: Text = None,
-    confirm: ConfirmFlag = False,
-    confirmation_token: Text = None,
-    idempotency_key: Text = None,
+    order_reference: Annotated[str, Field(description="PointNXT order number, optionally prefixed with #.")],
+    shipment_id: Annotated[str | None, Field(description="Shipment UUID to retry.")] = None,
+    reason: Annotated[str | None, Field(description="Reason for requesting delivery retry.")] = None,
+    confirm: Annotated[bool, Field(description="Commit the previously previewed delivery retry.")] = False,
+    confirmation_token: Annotated[str | None, Field(description="Signed token returned by the delivery-retry preview.")] = None,
+    idempotency_key: Annotated[str | None, Field(description="Stable key used to safely retry the same delivery-retry commit.")] = None,
 ):
     """Validate a shipment retry candidate and require confirmation; currently reports the absent backend retry workflow."""
     return await execute_retry_delivery(order_reference, shipment_id, reason, confirm, confirmation_token, idempotency_key)
