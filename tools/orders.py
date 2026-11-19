@@ -209,7 +209,8 @@ async def _load_create_order_target(args: dict[str, Any], context: WriteContext)
 
 
 async def _enrich_order_items(args: dict[str, Any]) -> None:
-    api = get_api()
+    from tools.products import search_products
+
     for item in args.get("items") or []:
         if not isinstance(item, dict):
             continue
@@ -217,11 +218,9 @@ async def _enrich_order_items(args: dict[str, Any]) -> None:
         code = normalized.get("code") or normalized.get("channelSku")
         if not code or normalized.get("productId"):
             continue
-        # Keep this request identical to search_products/get_products defaults.
-        response = await api.async_get("/commerce/products", params={"limit": 10, "page": 1, "sku": str(code)})
-        data = response.get("data", response) if isinstance(response, dict) else {}
-        products = data.get("items", []) if isinstance(data, dict) else []
-        matches = [product for product in products if str(product.get("sku") or product.get("code") or "").casefold() == str(code).casefold()]
+        response = await search_products(limit=20, page=1, sku=str(code))
+        products = response.get("products", []) if isinstance(response, dict) else []
+        matches = [product for product in products if str(product.get("sku") or product.get("code") or "").strip() == str(code).strip()]
         if not matches:
             raise WriteError("NOT_FOUND", f"Unknown SKU: {code}")
         product = matches[0]

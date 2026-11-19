@@ -78,18 +78,19 @@ async def test_create_order_bad_address_names_fields(setup_tools):
 async def test_create_order_item_aliases_preview_code_and_lookup(setup_tools):
     address = {"name": "Jane", "phone": "12345", "addressLine1": "1 Main", "city": "Pune", "stateOrRegion": "MH", "postalCode": "411001", "countryCode": "IN"}
     args = {"order_no": "RAW-3", "order_date": "2026-11-19T10:00:00Z", "seller_id": "33333333-3333-4333-8333-333333333333", "channel_id": CHANNEL_ID, "billing_address": address, "shipping_address": address, "items": [{"sku": "SKU-1", "quantity": 1, "price": 10}]}
-    api = AsyncMock(); api.async_get = AsyncMock(return_value={"data": {"items": [{"sku": "SKU-1", "name": "Widget"}]}})
-    with patch("tools.orders.get_api", return_value=api):
+    api = AsyncMock(); api.async_get = AsyncMock(return_value={"data": {"items": [{"id": "p1", "sku": "SKU-1", "name": "Widget"}]}})
+    with patch("tools.orders.get_api", return_value=api), patch("tools.products.get_api", return_value=api):
         result = await server.mcp.call_tool("create_order", args)
     assert "SKU-1" in str(result)
-    api.async_get.assert_awaited_once_with("/commerce/products", params={"limit": 10, "page": 1, "sku": "SKU-1"})
+    assert api.async_get.await_args_list[0].args == ("/commerce/products",)
+    assert api.async_get.await_args_list[0].kwargs == {"params": {"limit": 20, "page": 1, "sku": "SKU-1"}}
 
 @pytest.mark.asyncio
 async def test_create_order_unknown_sku_is_not_found(setup_tools):
     address = {"name": "Jane", "phone": "12345", "addressLine1": "1 Main", "city": "Pune", "stateOrRegion": "MH", "postalCode": "411001", "countryCode": "IN"}
     args = {"order_no": "RAW-4", "order_date": "2026-11-19T10:00:00Z", "seller_id": "33333333-3333-4333-8333-333333333333", "channel_id": CHANNEL_ID, "billing_address": address, "shipping_address": address, "items": [{"sku": "UNKNOWN", "quantity": 1, "price": 10}]}
     api = AsyncMock(); api.async_get = AsyncMock(return_value={"data": {"items": []}})
-    with patch("tools.orders.get_api", return_value=api):
+    with patch("tools.orders.get_api", return_value=api), patch("tools.products.get_api", return_value=api):
         result = await server.mcp.call_tool("create_order", args)
     assert "NOT_FOUND" in str(result) and "Unknown SKU: UNKNOWN" in str(result)
 
@@ -98,7 +99,7 @@ async def test_create_order_sku_lookup_400_includes_backend_body_and_request_pat
     address = {"name": "Jane", "phone": "12345", "addressLine1": "1 Main", "city": "Pune", "stateOrRegion": "MH", "postalCode": "411001", "countryCode": "IN"}
     args = {"order_no": "RAW-5", "order_date": "2026-11-19T10:00:00Z", "seller_id": "33333333-3333-4333-8333-333333333333", "channel_id": CHANNEL_ID, "billing_address": address, "shipping_address": address, "items": [{"sku": "BAD", "quantity": 1, "price": 10}]}
     api = AsyncMock(); api.async_get = AsyncMock(side_effect=httpx.HTTPStatusError("bad", request=httpx.Request("GET", "https://example.test/v1/commerce/products"), response=httpx.Response(400, text="SKU filter rejected")))
-    with patch("tools.orders.get_api", return_value=api):
+    with patch("tools.orders.get_api", return_value=api), patch("tools.products.get_api", return_value=api):
         result = await server.mcp.call_tool("create_order", args)
     assert "SKU filter rejected" in str(result)
     assert "GET /v1/commerce/products" in str(result)

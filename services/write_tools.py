@@ -260,6 +260,11 @@ def _redact(value: Any, key: str = "") -> Any:
     return value
 
 
+def _safe_request_params(request: Any) -> dict[str, Any]:
+    params = getattr(getattr(request, "url", None), "params", None)
+    return _redact(dict(params)) if params is not None else {}
+
+
 def _sanitize_arguments(args: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
     properties = schema.get("properties", {})
     required = schema.get("required", [])
@@ -359,12 +364,15 @@ def map_backend_error(error: BaseException, request_id: str) -> WriteError:
             payload = {}
             message = getattr(response, "text", "") or message
         if response is not None and request is not None and status in {400, 404, 422}:
-            path = getattr(getattr(request, "url", None), "path", "[unknown]")
+            url = str(getattr(request, "url", "[unknown]"))
+            path = url.split("://", 1)[-1]
+            path = path[path.find("/"):] if "/" in path else path
             message = f"{message} ({request.method} {path})"
         if response is not None:
             logger.warning(
-                "PointNXT write request failed url=%s status=%s body=%s",
+                "PointNXT write request failed url=%s status=%s body=%s params=%s",
                 getattr(request, "url", "[unknown]"), status, _redact(payload or getattr(response, "text", "")),
+                _safe_request_params(request),
             )
         return WriteError(code_by_status[status], message, request_id=request_id)
     if status is not None and status >= 500:
