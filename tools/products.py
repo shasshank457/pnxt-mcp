@@ -245,6 +245,7 @@ _LISTING_UPDATE_FIELDS = (
 _NULLABLE_LISTING_FIELDS = frozenset({"allocation", "min_publish_qty", "max_publish_qty"})
 _ALLOCATION_MODES = frozenset({"SHARED", "PERCENT", "FIXED", "UNMANAGED"})
 _ZERO_QUANTITY_BEHAVIOURS = frozenset({"PUBLISH_ZERO", "UNPUBLISH"})
+_MISSING_LISTING_ENDPOINT = "TODO_CAPTURE_PRODUCT_CHANNEL_LISTING_ENDPOINT"
 
 
 def _validate_listing_ids(args: dict[str, Any], context: WriteContext) -> None:
@@ -289,10 +290,15 @@ async def _verify_listing_target(args: dict[str, Any], context: WriteContext) ->
     if not isinstance(product, dict) or product.get("tenantId") != str(context.tenant_id):
         raise WriteError("NOT_PERMITTED", "The product does not belong to the authenticated tenant or tenant ownership could not be verified.")
     params = {"externalId": args["external_id"]} if args.get("external_id") is not None else None
-    verify_response = await api.async_get(
-        f"/commerce/products/{args['product_id'].strip()}/channels/{args['channel_id'].strip()}/settings/verify",
-        params=params,
-    )
+    try:
+        verify_response = await api.async_get(
+            f"/commerce/products/{args['product_id'].strip()}/channels/{args['channel_id'].strip()}/settings/verify",
+            params=params,
+        )
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 404:
+            raise WriteError("CAPABILITY_MISSING", "PointNXT product channel-listing read endpoint is not confirmed.", details={"todo": _MISSING_LISTING_ENDPOINT, "capture": ["URL", "HTTP method", "payload field names"]}) from error
+        raise
     listing = verify_response.get("data", verify_response) if isinstance(verify_response, dict) else {}
     required = ("id", "tenantId", "productId", "channelId")
     if not isinstance(listing, dict) or any(not listing.get(field) for field in required):

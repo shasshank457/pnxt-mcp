@@ -345,13 +345,18 @@ def map_backend_error(error: BaseException, request_id: str) -> WriteError:
         if status == 401:
             message = "Your PointNXT session has expired. Reconnect pnxt-mcp in Claude and try again."
         response = getattr(error, "response", None)
+        request = getattr(error, "request", None)
+        response_text = getattr(response, "text", "") if response is not None else ""
+        if status == 404 and isinstance(response_text, str) and "Cannot GET" in response_text or status == 404 and isinstance(response_text, str) and "Cannot POST" in response_text:
+            method = getattr(request, "method", "GET")
+            path = getattr(getattr(request, "url", None), "path", "[unknown]")
+            message = f"Backend endpoint not found: {method} {path}"
         try:
             payload = response.json() if response is not None else {}
             message = payload.get("message") or payload.get("error") or message
         except Exception:
             payload = {}
         if response is not None:
-            request = getattr(error, "request", None)
             logger.warning(
                 "PointNXT write request failed url=%s status=%s body=%s",
                 getattr(request, "url", "[unknown]"), status, _redact(payload or getattr(response, "text", "")),

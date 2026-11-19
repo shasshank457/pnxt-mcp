@@ -75,6 +75,9 @@ class OrderItem(BaseModel):
     item_image: str | None = None
     productId: str | None = None
     product_id: str | None = None
+    sku: str | None = None
+    quantity: float | None = None
+    price: float | None = None
 
 
 def _finite_number(value: Any) -> bool:
@@ -124,7 +127,9 @@ def _validate_create_order_input(args: dict[str, Any], context: WriteContext) ->
         normalized_item = _normalize_item(item) if isinstance(item, dict) else {}
         unknown = set(item) - set(OrderItem.model_fields) if isinstance(item, dict) else set()
         if unknown:
-            raise WriteError("VALIDATION_ERROR", f"item unexpected fields={sorted(unknown)}")
+            raise WriteError("VALIDATION_ERROR", f"item unexpected fields={sorted(unknown)}; expected fields include name, sku/code, quantity/quantityOrdered, and price/itemPrice")
+        if not isinstance(item, dict):
+            raise WriteError("VALIDATION_ERROR", "item must be an object; expected fields include name, sku/code, quantity/quantityOrdered, and price/itemPrice")
         if not isinstance(normalized_item.get("name"), str) or not normalized_item["name"].strip():
             raise WriteError("VALIDATION_ERROR", "Each item name must be non-empty.")
         if not _finite_number(normalized_item.get("quantityOrdered")) or normalized_item["quantityOrdered"] <= 0:
@@ -173,7 +178,7 @@ def _normalize_address(address: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
-    aliases = {"quantity_ordered": "quantityOrdered", "item_price": "itemPrice", "channel_sku": "channelSku", "item_image": "itemImage", "product_id": "productId"}
+    aliases = {"sku": "code", "quantity": "quantityOrdered", "price": "itemPrice", "quantity_ordered": "quantityOrdered", "item_price": "itemPrice", "channel_sku": "channelSku", "item_image": "itemImage", "product_id": "productId"}
     result = dict(item)
     for old, new in aliases.items():
         if result.get(new) is None and old in result:
@@ -198,8 +203,30 @@ def _create_item_payload(item: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _load_create_order_target(args: dict[str, Any], context: WriteContext) -> dict[str, Any]:
+    await _enrich_order_items(args)
     _validate_create_order_input(args, context)
     return {"id": f"create-order:{args['order_no'].strip()}", "reference": args["order_no"].strip()}
+
+
+async def _enrich_order_items(args: dict[str, Any]) -> None:
+    api = get_api()
+    for item in args.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        normalized = _normalize_item(item)
+        code = normalized.get("code") or normalized.get("channelSku")
+        if not code or normalized.get("productId"):
+            continue
+        response = await api.async_get("/commerce/products", params={"limit": 20, "page": 1, "sku": str(code)})
+        data = response.get("data", response) if isinstance(response, dict) else {}
+        products = data.get("items", []) if isinstance(data, dict) else []
+        matches = [product for product in products if str(product.get("sku") or product.get("code") or "").casefold() == str(code).casefold()]
+        if not matches:
+            raise WriteError("NOT_FOUND", f"No product found for SKU {code}.")
+        product = matches[0]
+        item["code"] = str(product.get("sku") or product.get("code") or code)
+        if not item.get("name") and product.get("name"):
+            item["name"] = product["name"]
 
 
 def _validate_create_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> None:
@@ -208,7 +235,7 @@ def _validate_create_order(args: dict[str, Any], target: dict[str, Any], context
 
 def _preview_create_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> dict[str, Any]:
     normalized_items = [_normalize_item(item) for item in args["items"]]
-    items = [{"name": item["name"], "quantity_ordered": item["quantityOrdered"], "item_price": item["itemPrice"]} for item in normalized_items]
+    items = [{"name": item["name"], "code": item.get("code") or item.get("channelSku"), "quantity_ordered": item["quantityOrdered"], "item_price": item["itemPrice"]} for item in normalized_items]
     estimated_total = sum(item["quantityOrdered"] * item["itemPrice"] for item in normalized_items)
     return {"summary": f"Create order {target['reference']}", "proposed_changes": {"order_no": target["reference"], "seller_id": args["seller_id"], "channel_id": args["channel_id"], "customer_id": args.get("customer_id"), "items": items, "estimated_total": estimated_total}, "side_effects": ["Creates the order and address records. Address validation may create validation records or an Address Issue tag."], "warnings": ["Payment is not processed, stock is not reserved, and paymentMethod is informational only."]}
 

@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
+import httpx
 
 import server
 from services import write_tools
@@ -72,6 +73,35 @@ async def test_create_order_bad_address_names_fields(setup_tools):
     result = await server.mcp.call_tool("create_order", args)
     text = str(result)
     assert "missing" in text and "unexpected" in text and "phone" in text
+
+@pytest.mark.asyncio
+async def test_create_order_item_aliases_preview_code_and_lookup(setup_tools):
+    address = {"name": "Jane", "phone": "12345", "addressLine1": "1 Main", "city": "Pune", "stateOrRegion": "MH", "postalCode": "411001", "countryCode": "IN"}
+    args = {"order_no": "RAW-3", "order_date": "2026-11-19T10:00:00Z", "seller_id": "33333333-3333-4333-8333-333333333333", "channel_id": CHANNEL_ID, "billing_address": address, "shipping_address": address, "items": [{"sku": "SKU-1", "quantity": 1, "price": 10}]}
+    api = AsyncMock(); api.async_get = AsyncMock(return_value={"data": {"items": [{"sku": "SKU-1", "name": "Widget"}]}})
+    with patch("tools.orders.get_api", return_value=api):
+        result = await server.mcp.call_tool("create_order", args)
+    assert "SKU-1" in str(result)
+
+@pytest.mark.asyncio
+async def test_create_order_unknown_sku_is_not_found(setup_tools):
+    address = {"name": "Jane", "phone": "12345", "addressLine1": "1 Main", "city": "Pune", "stateOrRegion": "MH", "postalCode": "411001", "countryCode": "IN"}
+    args = {"order_no": "RAW-4", "order_date": "2026-11-19T10:00:00Z", "seller_id": "33333333-3333-4333-8333-333333333333", "channel_id": CHANNEL_ID, "billing_address": address, "shipping_address": address, "items": [{"sku": "UNKNOWN", "quantity": 1, "price": 10}]}
+    api = AsyncMock(); api.async_get = AsyncMock(return_value={"data": {"items": []}})
+    with patch("tools.orders.get_api", return_value=api):
+        result = await server.mcp.call_tool("create_order", args)
+    assert "NOT_FOUND" in str(result)
+
+@pytest.mark.asyncio
+async def test_listing_missing_verify_route_fails_closed(setup_tools):
+    api = AsyncMock()
+    api.async_get = AsyncMock(side_effect=[
+        {"data": {"id": PRODUCT_ID, "tenantId": TENANT}},
+        httpx.HTTPStatusError("Cannot GET", request=httpx.Request("GET", "https://example.test/v1/commerce/products/x/channels/y/settings/verify"), response=httpx.Response(404, text="Cannot GET /v1/commerce/products/x/channels/y/settings/verify")),
+    ])
+    with patch("tools.products.get_api", return_value=api):
+        result = await server.mcp.call_tool("update_product_channel_listing", {"product_id": PRODUCT_ID, "channel_id": CHANNEL_ID, "channel_buffer": 1})
+    assert "CAPABILITY_MISSING" in str(result)
 
 def test_no_generic_parameter_descriptions_remain():
     for tool in server.mcp._tool_manager.list_tools():
