@@ -8,12 +8,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-from datetime import datetime, timezone
 from typing import Any, Literal, TypedDict
+
+import httpx
 
 from config import PNXT_RETURN_WINDOW_DAYS
 from services.pointnxt_api import PointNXTAPI
-from services.write_tools import WriteContext, WriteError, WriteToolSpec
+from services.write_tools import WriteContext, WriteError, WriteToolSpec, map_backend_error
 from tools.orders import get_api, parse_permitted_transitions
 
 _ORDER_LOOKUP = "/commerce/orders"
@@ -29,6 +30,17 @@ def _body(response: Any) -> dict[str, Any]:
     value = response.get("data", response) if isinstance(response, dict) else {}
     return value if isinstance(value, dict) else {}
 
+
+async def _search_reference(api: PointNXTAPI, reference: str) -> list[dict[str, Any]]:
+    try:
+        result = await api.async_get(_ORDER_LOOKUP, params={"limit": 20, "page": 1, "search": reference})
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 404:
+            raise WriteError("NOT_FOUND", f"No order found for {reference}.") from error
+        raise
+    data = result.get("data", result) if isinstance(result, dict) else {}
+    return data.get("items", []) if isinstance(data, dict) else []
+
 async def _resolve(args: dict[str, Any]) -> dict[str, Any]:
     order_id, reference = args.get("order_id"), args.get("order_reference")
     api = get_api()
@@ -36,26 +48,51 @@ async def _resolve(args: dict[str, Any]) -> dict[str, Any]:
         order = _body(await api.async_get(f"/commerce/orders/{order_id.strip()}"))
         if reference:
             ref_value = str(reference).strip().lstrip("#")
-            result = await api.async_get(_ORDER_LOOKUP, params={"orderNo": ref_value})
-            data = result.get("data", result) if isinstance(result, dict) else {}
-            items = data.get("items", []) if isinstance(data, dict) else []
-            if items and str(items[0].get("id")) != str(order.get("id")):
+            items = await _search_reference(api, ref_value)
+            matches = [item for item in items if _reference_matches(item, ref_value)]
+            if matches and str(matches[0].get("id")) != str(order.get("id")):
                 raise WriteError("INVALID_INPUT", "order_id and order_reference resolve to different orders.")
     else:
         reference = str(reference).strip().lstrip("#")
-        result = await api.async_get(_ORDER_LOOKUP, params={"orderNo": reference})
-        data = result.get("data", result) if isinstance(result, dict) else {}
-        items = data.get("items", []) if isinstance(data, dict) else []
-        if not items:
-            raise WriteError("NOT_FOUND", "The order was not found.")
-        order = _body(await api.async_get(f"/commerce/orders/{items[0].get('id')}"))
+        items = await _search_reference(api, reference)
+        matches = [item for item in items if _reference_matches(item, reference)]
+        if not matches:
+            raise WriteError("NOT_FOUND", f"No order found for {reference}.")
+        order = _body(await api.async_get(f"/commerce/orders/{matches[0].get('id')}"))
     if not order.get("id"):
         raise WriteError("NOT_FOUND", "The order was not found.")
     return order
 
+
+def _reference_matches(item: dict[str, Any], reference: str) -> bool:
+    wanted = str(reference).strip().lstrip("#").casefold()
+    return any(str(item.get(key, "")).strip().lstrip("#").casefold() == wanted for key in ("orderNo", "channelOrderNo"))
+
+
+def _masked_address(address: dict[str, Any]) -> dict[str, Any]:
+    phone = str(address.get("phone") or address.get("mobile") or "")
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    return {
+        "name": f"{str(address.get('name') or '')[:1]}***" if address.get("name") else "***",
+        "phone": f"******{digits[-4:]}" if len(digits) >= 4 else "***",
+        "addressLine1": "***",
+        "addressLine2": "***",
+        "city": address.get("city"),
+        "stateOrRegion": address.get("stateOrRegion"),
+        "postalCode": address.get("postalCode"),
+    }
+
+
+def _compact_state(order: dict[str, Any], *, include_address: bool = False) -> dict[str, Any]:
+    state = {key: order.get(key) for key in ("id", "orderNo", "channelOrderNo", "orderStatus", "version", "paymentMode", "grandTotal", "tags")}
+    if include_address:
+        state["shippingAddress"] = _masked_address(order.get("shippingAddress") or {})
+    return {key: value for key, value in state.items() if value is not None}
+
 def _target(order: dict[str, Any]) -> dict[str, Any]:
     return {"id": str(order["id"]), "reference": order.get("orderNo") or str(order["id"]),
-            "version": order.get("version") or order.get("updatedAt") or order.get("updated_at"), "order": order}
+            "version": order.get("version") or order.get("updatedAt") or order.get("updated_at"), "order": order,
+            "state": _compact_state(order)}
 
 def _identity_schema() -> dict[str, Any]:
     return {
@@ -128,7 +165,11 @@ async def _execute_bulk(args,target,context):
 BULK_CHANGE_ORDER_STATUS_SPEC=WriteToolSpec("bulk_change_order_status","Preview and confirm status changes for up to 50 orders with per-order results.",{"type":"object","properties":{"order_references":{"type":"array","coerce_numeric_items":True,"items":{"type":"string"},"description":"One to 50 order numbers; duplicates are ignored."},"order_status":{"type":"string","description":"Target PointNXT order status."},"notes":{"type":"string","description":"Optional note applied to each status change."}},"required":["order_references","order_status"]},True,False,_load_bulk,_validate_bulk,_preview_bulk,_execute_bulk)
 
 _PHONE = re.compile(r"^[6-9]\d{9}$"); _PIN = re.compile(r"^[1-9]\d{5}$")
-async def _load_address(args, context): _require_identity(args); return _target(await _resolve(args))
+async def _load_address(args, context):
+    _require_identity(args)
+    target = _target(await _resolve(args))
+    target["state"] = _compact_state(target["order"], include_address=True)
+    return target
 def _validate_address(args,target,context):
     fields=("name","phone","address_line1","address_line2","landmark","city","state","pincode")
     if not any(args.get(k) is not None for k in fields): raise WriteError("VALIDATION_ERROR","At least one shipping address field is required.")

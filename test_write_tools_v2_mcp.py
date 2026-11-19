@@ -25,7 +25,7 @@ def _api():
     api = AsyncMock()
     api.async_get = AsyncMock(side_effect=[
         {"data": {"items": [{"id": ORDER_ID}]}},
-        {"data": {"id": ORDER_ID, "orderNo": "#TEST1613", "version": 4, "orderStatus": "CONFIRMED", "tags": ["VIP"]}},
+        {"data": {"id": ORDER_ID, "orderNo": "#TEST1613", "version": 4, "orderStatus": "CONFIRMED", "tags": ["VIP"], "channelOrderNo": "1643-TEST", "paymentMode": "PREPAID", "grandTotal": 1250, "customer": {"email": "alice@example.com", "phone": "9876543210"}, "tenantId": "tenant-secret", "tenant": {"id": "tenant-secret", "domain": "secret.example.com"}, "shippingAddress": {"name": "Alice", "phone": "9876543210", "addressLine1": "Secret Street", "addressLine2": "Flat 2", "city": "Pune", "stateOrRegion": "MH", "postalCode": "411001"}}},
     ])
     api.async_request = AsyncMock(return_value={"data": {"email": "alice@example.com", "phone": "9876543210", "tenantId": "hidden", "addressLine1": "hidden", "productName": "Widget"}})
     return api
@@ -58,12 +58,26 @@ async def test_registered_edit_tags_mismatching_ids_is_invalid_input(raw_tool):
     api = _api()
     api.async_get.side_effect = [
         {"data": {"id": ORDER_ID, "orderNo": "#TEST1613", "version": 4, "tags": []}},
-        {"data": {"items": [{"id": "22222222-2222-4222-8222-222222222222"}]}},
+        {"data": {"items": [{"id": "22222222-2222-4222-8222-222222222222", "orderNo": "#OTHER"}]}},
     ]
     with patch("tools.write_tools_v2.get_api", return_value=api):
         raw_tool(EDIT_ORDER_TAGS_SPEC)
         result = await server.mcp.call_tool("edit_order_tags", {"order_id": ORDER_ID, "order_reference": "#OTHER"})
     assert "INVALID_INPUT" in str(result)
+
+@pytest.mark.asyncio
+async def test_write_preview_never_returns_raw_order_or_unmasked_pii(raw_tool):
+    api = _api()
+    with patch("tools.write_tools_v2.get_api", return_value=api):
+        raw_tool(EDIT_ORDER_TAGS_SPEC)
+        result = await server.mcp.call_tool("edit_order_tags", {"order_id": ORDER_ID})
+    text = str(result)
+    assert "alice@example.com" not in text
+    assert "9876543210" not in text
+    assert "Secret Street" not in text
+    assert "tenant-secret" not in text
+    assert "secret.example.com" not in text
+    assert '"order"' not in text
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("spec,args", [

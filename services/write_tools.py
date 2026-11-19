@@ -345,7 +345,13 @@ def map_backend_error(error: BaseException, request_id: str) -> WriteError:
             payload = response.json() if response is not None else {}
             message = payload.get("message") or payload.get("error") or message
         except Exception:
-            pass
+            payload = {}
+        if response is not None:
+            request = getattr(error, "request", None)
+            logger.warning(
+                "PointNXT write request failed url=%s status=%s body=%s",
+                getattr(request, "url", "[unknown]"), status, _redact(payload or getattr(response, "text", "")),
+            )
         return WriteError(code_by_status[status], message, request_id=request_id)
     if status is not None and status >= 500:
         return WriteError("BACKEND_ERROR", "PointNXT is temporarily unavailable.", retryable=True, request_id=request_id)
@@ -425,15 +431,25 @@ class WriteToolFramework:
         if confirm and not spec.load_target_on_commit:
             target = {"id": args.get("order_id")}
         else:
-            target = await _maybe_await(spec.load_target(args, context))
-        await _maybe_await(spec.validate(args, target, context))
+            try:
+                target = await _maybe_await(spec.load_target(args, context))
+            except WriteError:
+                raise
+            except Exception as error:
+                raise map_backend_error(error, context.request_id) from error
+        try:
+            await _maybe_await(spec.validate(args, target, context))
+        except WriteError:
+            raise
+        except Exception as error:
+            raise map_backend_error(error, context.request_id) from error
         args_hash = _args_hash(args)
 
         if not confirm:
             preview = await _maybe_await(spec.build_preview(args, target, context))
             token, token_payload = self.tokens.issue(spec, args, target, context)
             self._audit(context, spec, "preview", target, args, None, time.perf_counter())
-            return {
+            return sanitize_public_response({
                 "status": "preview",
                 "action": spec.name,
                 "target": _target_summary(spec, target),
@@ -444,7 +460,7 @@ class WriteToolFramework:
                 "summary": preview.get("summary", f"Preview {spec.name}") if isinstance(preview, dict) else f"Preview {spec.name}",
                 "confirmation_token": token,
                 "expires_at": datetime.fromtimestamp(token_payload["expires_at"], timezone.utc).isoformat(),
-            }
+            })
 
         token = args.get("confirmation_token")
         if not isinstance(token, str) or not token:
@@ -541,7 +557,7 @@ def register_write_tool(mcp: Any, spec: WriteToolSpec, framework: WriteToolFrame
         try:
             return await framework.invoke(spec, kwargs, _handler_context())
         except WriteError as error:
-            return error.as_dict()
+            return sanitize_public_response(error.as_dict())
 
     handler.__name__ = spec.name
     handler.__doc__ = spec.description

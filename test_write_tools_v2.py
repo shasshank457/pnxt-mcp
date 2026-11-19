@@ -61,7 +61,7 @@ async def test_tags_no_change_and_idempotency_replay_is_masked(enabled):
 
 @pytest.mark.asyncio
 async def test_bulk_split_and_capability_stubs_make_no_write(enabled):
-    api=AsyncMock(); api.async_get=AsyncMock(side_effect=[{"data":{"CONFIRMED":["SHIPPED"]}}, {"data":{"items":[{"id":ORDER_ID}]}}, order()]); api.async_request=AsyncMock()
+    api=AsyncMock(); api.async_get=AsyncMock(side_effect=[{"data":{"CONFIRMED":["SHIPPED"]}}, {"data":{"items":[{"id":ORDER_ID,"orderNo":"#TEST1613"}]}}, order()]); api.async_request=AsyncMock()
     with patch("tools.write_tools_v2.get_api", return_value=api):
         preview=await WriteToolFramework(secret="x"*32).invoke(BULK_CHANGE_ORDER_STATUS_SPEC,{"order_references":["#TEST1613","#TEST1613"],"order_status":"SHIPPED"},enabled)
         assert len(preview["proposed_changes"]["ready"]) == 1 and not api.async_request.called
