@@ -219,10 +219,17 @@ async def _load_order_tags_target(args: dict[str, Any], context: WriteContext) -
     order = response.get("data", response) if isinstance(response, dict) else {}
     if not isinstance(order, dict) or not order.get("id"):
         raise WriteError("NOT_FOUND", "The order was not found.")
+    tags = [
+        tag.get("name") or tag.get("normalized") if isinstance(tag, dict) else str(tag)
+        for tag in (order.get("tags") or [])
+    ]
+    tags = [str(tag) for tag in tags if tag]
     return {
         "id": str(order["id"]),
         "reference": order.get("orderNo") or str(order["id"]),
         "version": order.get("version") or order.get("updatedAt") or order.get("updated_at"),
+        "tags": tags,
+        "tag_fingerprint": hashlib.sha256("\x1f".join(sorted(tag.casefold() for tag in tags)).encode()).hexdigest(),
     }
 
 

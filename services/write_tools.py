@@ -234,6 +234,8 @@ def _target_version(target: Any) -> str | None:
     if not isinstance(target, dict):
         return None
     value = target.get("version") or target.get("updatedAt") or target.get("updated_at")
+    if target.get("tag_fingerprint"):
+        value = f"{value}|tags:{target['tag_fingerprint']}"
     return str(value) if value is not None else None
 
 

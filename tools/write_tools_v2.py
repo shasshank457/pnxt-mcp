@@ -94,6 +94,19 @@ def _target(order: dict[str, Any]) -> dict[str, Any]:
             "version": order.get("version") or order.get("updatedAt") or order.get("updated_at"), "order": order,
             "state": _compact_state(order)}
 
+
+def _tag_names(order: dict[str, Any]) -> list[str]:
+    names = []
+    for tag in order.get("tags") or []:
+        value = tag.get("name") or tag.get("normalized") if isinstance(tag, dict) else tag
+        if value:
+            names.append(str(value))
+    return names
+
+
+def _tag_fingerprint(names: list[str]) -> str:
+    return hashlib.sha256("\x1f".join(sorted(name.casefold() for name in names)).encode()).hexdigest()
+
 def _identity_schema() -> dict[str, Any]:
     return {
         "order_id": {"type": "string", "coerce_numeric_string": True, "description": "Internal PointNXT order UUID; use this or order_reference."},
@@ -123,13 +136,13 @@ async def _execute_cancel(args, target, context):
 CANCEL_ORDER_SPEC = WriteToolSpec("cancel_order", "Preview and confirm cancellation of an eligible PointNXT order.", {"type":"object","properties":{**_identity_schema(),"reason":{"type":"string","description":"Reason for cancellation, at least 3 characters."}},"required":["reason"]}, True, False, _load_cancel, _validate_cancel, _preview_cancel, _execute_cancel)
 
 async def _load_tags(args, context):
-    _require_identity(args); order = await _resolve(args); return _target(order)
+    _require_identity(args); order = await _resolve(args); target = _target(order); target["tag_fingerprint"] = _tag_fingerprint(_tag_names(order)); return target
 def _validate_tags(args, target, context):
     for key in ("add", "remove"):
         values = args.get(key) or []
         if not isinstance(values, list) or any(not isinstance(v, str) or not v.strip() for v in values): raise WriteError("VALIDATION_ERROR", f"{key} must be an array of non-empty strings.")
 def _preview_tags(args, target, context):
-    current = list(target["order"].get("tags") or []); removed = {v.casefold() for v in (args.get("remove") or [])}; result = [v for v in current if str(v).casefold() not in removed]
+    current = _tag_names(target["order"]); removed = {v.casefold() for v in (args.get("remove") or [])}; result = [v for v in current if str(v).casefold() not in removed]
     seen = {str(v).casefold() for v in result}
     for value in (args.get("add") or []):
         if value.casefold() not in seen: result.append(value); seen.add(value.casefold())
@@ -152,7 +165,9 @@ async def _load_bulk(args, context):
     return {"id":"bulk:"+hashlib.sha256("|".join(x["id"] for x in ready).encode()).hexdigest()[:16],"reference":"bulk","version":hashlib.sha256(repr(ready).encode()).hexdigest(),"ready":ready,"skipped":skipped}
 def _validate_bulk(args,target,context):
     if args.get("order_status","").upper()=="": raise WriteError("VALIDATION_ERROR","order_status is required.")
-def _preview_bulk(args,target,context): return {"summary":f"Change {len(target['ready'])} orders to {args['order_status'].upper()}","proposed_changes":{"ready":target["ready"],"skipped":target["skipped"],"order_status":args["order_status"].upper(),"notes":args.get("notes")}}
+def _preview_bulk(args,target,context):
+    count = len(target["ready"])
+    return {"summary":f"Change {count} {'order' if count == 1 else 'orders'} to {args['order_status'].upper()}","proposed_changes":{"ready":target["ready"],"skipped":target["skipped"],"order_status":args["order_status"].upper(),"notes":args.get("notes")}}
 async def _execute_bulk(args,target,context):
     async def one(item):
         try:
@@ -182,7 +197,13 @@ def _validate_address(args,target,context):
         raise WriteError("VALIDATION_ERROR","Shipping address cannot be changed after shipping has started.")
     if status not in {"PENDING","ON_HOLD","CONFIRMED"}: raise WriteError("VALIDATION_ERROR","Shipping address cannot be changed in the current status.")
 def _preview_address(args,target,context):
-    old=target["order"].get("shippingAddress") or {}; changes={k:("******"+args[k][-4:] if k=="phone" else args[k]) for k in ("name","phone","address_line1","address_line2","landmark","city","state","pincode") if args.get(k) is not None and args[k]!=old.get(k)}
+    old=target["order"].get("shippingAddress") or {}; field_map={"address_line1":"addressLine1","address_line2":"addressLine2","state":"stateOrRegion","pincode":"postalCode","name":"name","phone":"phone","landmark":"landmark","city":"city"}
+    def display(key, value):
+        if key == "name": return f"{str(value)[:1]}***"
+        if key == "phone":
+            digits = "".join(ch for ch in str(value) if ch.isdigit()); return f"******{digits[-4:]}"
+        return value
+    changes={k:{"before":display(k, old.get(field_map[k])), "after":display(k, args[k])} for k in field_map if args.get(k) is not None and args[k]!=old.get(field_map[k])}
     return {"summary":f"Update shipping address for {target['reference']}","proposed_changes":changes}
 async def _execute_address(args,target,context):
     address=dict(target["order"].get("shippingAddress") or {}); field_map={"address_line1":"addressLine1","address_line2":"addressLine2","state":"stateOrRegion","pincode":"postalCode","name":"name","phone":"phone","landmark":"landmark","city":"city"}; address.update({field_map[k]:v for k,v in args.items() if k in field_map and v is not None}); return await get_api().async_request("PUT",f"/commerce/orders/{target['id']}",json={"shippingAddress":address,"version":target["version"]},retry=False)

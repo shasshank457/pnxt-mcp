@@ -7,6 +7,7 @@ from tools.write_tools_v2 import (
     ADJUST_STOCK_SPEC, BULK_CHANGE_ORDER_STATUS_SPEC, CANCEL_ORDER_SPEC,
     CREATE_RETURN_REQUEST_SPEC, EDIT_ORDER_TAGS_SPEC, UPDATE_SHIPPING_ADDRESS_SPEC,
 )
+from tools.orders import UPDATE_ORDER_TAGS_SPEC
 
 ORDER_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -76,4 +77,34 @@ async def test_backend_401_maps_to_signed_out(enabled):
         framework=WriteToolFramework(secret="x"*32); preview=await framework.invoke(CANCEL_ORDER_SPEC,{"order_id":ORDER_ID,"reason":"duplicate"},enabled)
         with pytest.raises(WriteError) as exc: await framework.invoke(CANCEL_ORDER_SPEC,{"order_id":ORDER_ID,"reason":"duplicate","confirm":True,"confirmation_token":preview["confirmation_token"]},enabled)
         assert exc.value.code == "SIGNED_OUT"
+
+@pytest.mark.asyncio
+async def test_object_tags_are_normalized_for_remove_and_case_insensitive_add(enabled):
+    api = AsyncMock(); api.async_get = AsyncMock(return_value=order(tags=[{"id": "1", "name": "mcp-test", "normalized": "mcp-test"}, {"id": "2", "normalized": "VIP"}])); api.async_request = AsyncMock()
+    with patch("tools.write_tools_v2.get_api", return_value=api):
+        framework = WriteToolFramework(secret="x" * 32)
+        removed = await framework.invoke(EDIT_ORDER_TAGS_SPEC, {"order_id": ORDER_ID, "remove": ["MCP-TEST"]}, enabled)
+        assert removed["proposed_changes"] == {"before": ["mcp-test", "VIP"], "after": ["VIP"]}
+        duplicate = await framework.invoke(EDIT_ORDER_TAGS_SPEC, {"order_id": ORDER_ID, "add": ["mCp-TeSt"]}, enabled)
+        assert "NO_CHANGE" in duplicate["warnings"]
+
+@pytest.mark.asyncio
+async def test_tag_change_between_preview_and_commit_is_stale(enabled):
+    api = AsyncMock(); api.async_get = AsyncMock(side_effect=[order(tags=[{"name": "mcp-test"}]), order(tags=[{"name": "other"}])]); api.async_request = AsyncMock()
+    with patch("tools.write_tools_v2.get_api", return_value=api):
+        framework = WriteToolFramework(secret="x" * 32)
+        preview = await framework.invoke(EDIT_ORDER_TAGS_SPEC, {"order_id": ORDER_ID, "add": ["new"]}, enabled)
+        with pytest.raises(WriteError) as exc:
+            await framework.invoke(EDIT_ORDER_TAGS_SPEC, {"order_id": ORDER_ID, "add": ["new"], "confirm": True, "confirmation_token": preview["confirmation_token"]}, enabled)
+        assert exc.value.code == "STALE_PREVIEW"
+
+@pytest.mark.asyncio
+async def test_existing_update_order_tags_also_detects_tag_change(enabled):
+    api = AsyncMock(); api.async_get = AsyncMock(side_effect=[order(tags=[{"name": "mcp-test"}]), order(tags=[{"name": "changed"}])]); api.async_request = AsyncMock()
+    with patch("tools.orders.get_api", return_value=api):
+        framework = WriteToolFramework(secret="x" * 32)
+        preview = await framework.invoke(UPDATE_ORDER_TAGS_SPEC, {"order_id": ORDER_ID, "tags": ["mcp-test"]}, enabled)
+        with pytest.raises(WriteError) as exc:
+            await framework.invoke(UPDATE_ORDER_TAGS_SPEC, {"order_id": ORDER_ID, "tags": ["mcp-test"], "confirm": True, "confirmation_token": preview["confirmation_token"]}, enabled)
+        assert exc.value.code == "STALE_PREVIEW"
 
