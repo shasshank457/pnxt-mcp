@@ -11,6 +11,8 @@ from datetime import timezone as dt_timezone
 from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel, ConfigDict
+
 from services.auth_session import get_session
 from services.customer_matching import (
     normalize_email,
@@ -39,6 +41,42 @@ _ADDRESS_OPTIONAL = frozenset({"company_legal_name", "email", "address_line2", "
 _ITEM_ALLOWED = frozenset({"name", "quantity_ordered", "item_price", "code", "channel_sku", "item_image", "product_id"})
 
 
+class Address(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = None
+    phone: str | None = None
+    addressLine1: str | None = None
+    addressLine2: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    stateOrRegion: str | None = None
+    state_or_region: str | None = None
+    state: str | None = None
+    postalCode: str | None = None
+    postal_code: str | None = None
+    pincode: str | None = None
+    countryCode: str | None = None
+    country_code: str | None = None
+    email: str | None = None
+
+
+class OrderItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = None
+    quantityOrdered: float | None = None
+    quantity_ordered: float | None = None
+    itemPrice: float | None = None
+    item_price: float | None = None
+    code: str | None = None
+    channelSku: str | None = None
+    channel_sku: str | None = None
+    itemImage: str | None = None
+    item_image: str | None = None
+    productId: str | None = None
+    product_id: str | None = None
+
+
 def _finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
@@ -64,32 +102,37 @@ def _validate_create_order_input(args: dict[str, Any], context: WriteContext) ->
                 UUID(args[name].strip())
             except (ValueError, AttributeError):
                 raise WriteError("VALIDATION_ERROR", f"{name} must be a valid UUID.") from None
+    address_errors = []
     for name in ("billing_address", "shipping_address"):
         address = args.get(name)
         if not isinstance(address, dict):
             raise WriteError("VALIDATION_ERROR", f"{name} must be an object.")
-        unknown_address = set(address) - _ADDRESS_REQUIRED - _ADDRESS_OPTIONAL
-        if unknown_address or any(not isinstance(address.get(field), str) or not address[field].strip() for field in _ADDRESS_REQUIRED):
-            raise WriteError("VALIDATION_ERROR", f"{name} contains missing, invalid, or unexpected fields.")
-        for field in _ADDRESS_OPTIONAL:
-            if field in address and not isinstance(address[field], str):
-                raise WriteError("VALIDATION_ERROR", f"{name}.{field} must be a string.")
-        if "email" in address and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", address["email"]):
-            raise WriteError("VALIDATION_ERROR", f"{name}.email must be a valid email.")
+        normalized = _normalize_address(address)
+        unknown_address = set(address) - set(Address.model_fields)
+        missing = [field for field in ("name", "phone", "addressLine1", "city", "stateOrRegion", "postalCode", "countryCode") if not normalized.get(field)]
+        invalid = [field for field, value in normalized.items() if value is not None and not isinstance(value, str)]
+        if unknown_address or missing or invalid:
+            address_errors.append(f"{name}: missing={missing or []}, unexpected={sorted(unknown_address)}, invalid={invalid}")
+        if normalized.get("email") and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized["email"]):
+            address_errors.append(f"{name}: invalid=['email']")
+    if address_errors:
+        raise WriteError("VALIDATION_ERROR", "; ".join(address_errors))
     items = args.get("items")
     if not isinstance(items, list) or not items:
         raise WriteError("VALIDATION_ERROR", "items must be a non-empty array.")
     for item in items:
-        if not isinstance(item, dict) or set(item) - _ITEM_ALLOWED:
-            raise WriteError("VALIDATION_ERROR", "Each item contains invalid fields.")
-        if not isinstance(item.get("name"), str) or not item["name"].strip():
+        normalized_item = _normalize_item(item) if isinstance(item, dict) else {}
+        unknown = set(item) - set(OrderItem.model_fields) if isinstance(item, dict) else set()
+        if unknown:
+            raise WriteError("VALIDATION_ERROR", f"item unexpected fields={sorted(unknown)}")
+        if not isinstance(normalized_item.get("name"), str) or not normalized_item["name"].strip():
             raise WriteError("VALIDATION_ERROR", "Each item name must be non-empty.")
-        if not _finite_number(item.get("quantity_ordered")) or item["quantity_ordered"] <= 0:
+        if not _finite_number(normalized_item.get("quantityOrdered")) or normalized_item["quantityOrdered"] <= 0:
             raise WriteError("VALIDATION_ERROR", "quantity_ordered must be finite and positive.")
-        if not _finite_number(item.get("item_price")) or item["item_price"] < 0:
+        if not _finite_number(normalized_item.get("itemPrice")) or normalized_item["itemPrice"] < 0:
             raise WriteError("VALIDATION_ERROR", "item_price must be finite and non-negative.")
         for field in ("code", "channel_sku", "item_image"):
-            if field in item and not isinstance(item[field], str):
+            if field in normalized_item and normalized_item[field] is not None and not isinstance(normalized_item[field], str):
                 raise WriteError("VALIDATION_ERROR", f"{field} must be a string.")
         if item.get("product_id") is not None:
             try:
@@ -120,14 +163,38 @@ def _create_order_payload(args: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _normalize_address(address: dict[str, Any]) -> dict[str, Any]:
+    aliases = {"address_line1": "addressLine1", "address_line2": "addressLine2", "state": "stateOrRegion", "state_or_region": "stateOrRegion", "pincode": "postalCode", "postal_code": "postalCode", "country_code": "countryCode"}
+    result = dict(address)
+    for old, new in aliases.items():
+        if result.get(new) is None and old in result:
+            result[new] = result[old]
+    return result
+
+
+def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
+    aliases = {"quantity_ordered": "quantityOrdered", "item_price": "itemPrice", "channel_sku": "channelSku", "item_image": "itemImage", "product_id": "productId"}
+    result = dict(item)
+    for old, new in aliases.items():
+        if result.get(new) is None and old in result:
+            result[new] = result[old]
+    return result
+
+
+def _model_properties(model: type[BaseModel]) -> dict[str, Any]:
+    return {name: {**definition, "description": f"Order field {name}."} for name, definition in model.model_json_schema()["properties"].items()}
+
+
 def _create_address_payload(address: dict[str, Any]) -> dict[str, Any]:
-    mapping = {"name": "name", "phone": "phone", "address_line1": "addressLine1", "city": "city", "state_or_region": "stateOrRegion", "postal_code": "postalCode", "country_code": "countryCode", "company_legal_name": "companyLegalName", "email": "email", "address_line2": "addressLine2", "address_line3": "addressLine3", "county": "county", "district": "district", "municipality": "municipality", "taxing_region": "taxingRegion"}
-    return {backend: address[name] for name, backend in mapping.items() if name in address}
+    mapping = {"name": "name", "phone": "phone", "addressLine1": "addressLine1", "city": "city", "stateOrRegion": "stateOrRegion", "postalCode": "postalCode", "countryCode": "countryCode", "email": "email", "addressLine2": "addressLine2"}
+    address = _normalize_address(address)
+    return {backend: address[name] for name, backend in mapping.items() if name in address and address[name] is not None}
 
 
 def _create_item_payload(item: dict[str, Any]) -> dict[str, Any]:
-    mapping = {"name": "name", "quantity_ordered": "quantityOrdered", "item_price": "itemPrice", "code": "code", "channel_sku": "channelSku", "item_image": "itemImage", "product_id": "productId"}
-    return {backend: item[name] for name, backend in mapping.items() if name in item}
+    mapping = {"name": "name", "quantityOrdered": "quantityOrdered", "itemPrice": "itemPrice", "code": "code", "channelSku": "channelSku", "itemImage": "itemImage", "productId": "productId"}
+    item = _normalize_item(item)
+    return {backend: item[name] for name, backend in mapping.items() if name in item and item[name] is not None}
 
 
 async def _load_create_order_target(args: dict[str, Any], context: WriteContext) -> dict[str, Any]:
@@ -140,8 +207,9 @@ def _validate_create_order(args: dict[str, Any], target: dict[str, Any], context
 
 
 def _preview_create_order(args: dict[str, Any], target: dict[str, Any], context: WriteContext) -> dict[str, Any]:
-    items = [{"name": item["name"], "quantity_ordered": item["quantity_ordered"], "item_price": item["item_price"]} for item in args["items"]]
-    estimated_total = sum(item["quantity_ordered"] * item["item_price"] for item in args["items"])
+    normalized_items = [_normalize_item(item) for item in args["items"]]
+    items = [{"name": item["name"], "quantity_ordered": item["quantityOrdered"], "item_price": item["itemPrice"]} for item in normalized_items]
+    estimated_total = sum(item["quantityOrdered"] * item["itemPrice"] for item in normalized_items)
     return {"summary": f"Create order {target['reference']}", "proposed_changes": {"order_no": target["reference"], "seller_id": args["seller_id"], "channel_id": args["channel_id"], "customer_id": args.get("customer_id"), "items": items, "estimated_total": estimated_total}, "side_effects": ["Creates the order and address records. Address validation may create validation records or an Address Issue tag."], "warnings": ["Payment is not processed, stock is not reserved, and paymentMethod is informational only."]}
 
 
@@ -152,7 +220,7 @@ async def _execute_create_order(args: dict[str, Any], target: dict[str, Any], co
 CREATE_ORDER_SPEC = WriteToolSpec(
     name="create_order",
     description="Preview and, after explicit confirmation, create a PointNXT order. Payment is not processed, stock is not reserved, and tenant identity is derived from the authenticated session.",
-    input_schema={"type": "object", "properties": {"order_no": {"type": "string", "description": "Non-empty order number."}, "order_date": {"type": "string", "description": "ISO order date."}, "seller_id": {"type": "string", "description": "Seller UUID."}, "channel_id": {"type": "string", "description": "Channel UUID."}, "billing_address": {"type": "object", "description": "Required billing address."}, "shipping_address": {"type": "object", "description": "Required shipping address."}, "items": {"type": "array", "description": "Non-empty order item array."}, "customer_id": {"type": "string", "description": "Optional customer UUID."}, "currency": {"type": "string", "description": "Optional ISO 4217 currency."}, "payment_method": {"type": "string", "description": "Informational payment method; payment is not processed."}, "fulfillment_instruction": {"type": "string", "description": "Optional fulfillment instruction."}, "order_weight": {"type": "number", "description": "Optional positive finite weight."}, "weight_unit_code": {"type": "string", "enum": sorted(_ORDER_WEIGHT_UNITS), "description": "Weight unit."}, "dimension_length": {"type": "number", "description": "Positive finite length."}, "dimension_breadth": {"type": "number", "description": "Positive finite breadth."}, "dimension_height": {"type": "number", "description": "Positive finite height."}, "measure_unit_code": {"type": "string", "enum": sorted(_ORDER_MEASURE_UNITS), "description": "Measure unit."}}, "required": ["order_no", "order_date", "seller_id", "channel_id", "billing_address", "shipping_address", "items"]},
+    input_schema={"type": "object", "properties": {"order_no": {"type": "string", "description": "Non-empty order number."}, "order_date": {"type": "string", "description": "ISO order date."}, "seller_id": {"type": "string", "description": "Seller UUID."}, "channel_id": {"type": "string", "description": "Channel UUID."}, "billing_address": {"type": "object", "properties": _model_properties(Address), "description": "Required address; camelCase and snake_case aliases are accepted."}, "shipping_address": {"type": "object", "properties": _model_properties(Address), "description": "Required address; camelCase and snake_case aliases are accepted."}, "items": {"type": "array", "items": {"type": "object", "properties": _model_properties(OrderItem)}, "description": "Non-empty order item array."}, "customer_id": {"type": "string", "description": "Optional customer UUID."}, "currency": {"type": "string", "description": "Optional ISO 4217 currency."}, "payment_method": {"type": "string", "description": "Informational payment method; payment is not processed."}, "fulfillment_instruction": {"type": "string", "description": "Optional fulfillment instruction."}, "order_weight": {"type": "number", "description": "Optional positive finite weight."}, "weight_unit_code": {"type": "string", "enum": sorted(_ORDER_WEIGHT_UNITS), "description": "Weight unit."}, "dimension_length": {"type": "number", "description": "Optional positive finite length."}, "dimension_breadth": {"type": "number", "description": "Optional positive finite breadth."}, "dimension_height": {"type": "number", "description": "Optional positive finite height."}, "measure_unit_code": {"type": "string", "enum": sorted(_ORDER_MEASURE_UNITS), "description": "Optional measure unit."}}, "required": ["order_no", "order_date", "seller_id", "channel_id", "billing_address", "shipping_address", "items"]},
     destructive=True, open_world=False, load_target=_load_create_order_target, validate=_validate_create_order, build_preview=_preview_create_order, execute=_execute_create_order,
 )
 

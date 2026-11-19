@@ -201,7 +201,7 @@ WRITE_EXTERNAL = ToolAnnotations(
 # unchanged, while status fields advertise the same options used by validation.
 Limit = Annotated[int, Field(description="Number of records to return; 1-100.")]
 Page = Annotated[int, Field(description="1-based page number.")]
-Text = Annotated[str | None, Field(description="Optional text filter; matching behavior depends on the tool.")]
+Text = Annotated[str | None, Field(description="Optional PointNXT text value; omit when not applicable to this tool.")]
 Identifier = Annotated[str | None, Field(description="Optional PointNXT identifier used to narrow the search.")]
 Date = Annotated[str | None, Field(description="Optional calendar date in YYYY-MM-DD format, interpreted in the selected timezone.")]
 Timezone = Annotated[str | None, Field(description="Optional IANA timezone name; defaults to Asia/Kolkata.")]
@@ -720,10 +720,10 @@ async def retry_delivery(
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def update_support_ticket(
     ticket_id: RequiredId,
-    status: Text = None,
-    subject: Text = None,
-    description: Text = None,
-    idempotency_key: Text = None,
+    status: Annotated[str | None, Field(description="New support-ticket status.")] = None,
+    subject: Annotated[str | None, Field(description="Replacement support-ticket subject.")] = None,
+    description: Annotated[str | None, Field(description="Replacement support-ticket description.")] = None,
+    idempotency_key: Annotated[str | None, Field(description="Stable key for safely retrying the same support-ticket update.")] = None,
 ):
     """Update a real support ticket when a backend integration exists; currently fails closed because ticketing is unavailable."""
     return await execute_update_support_ticket(ticket_id, status, subject, description, idempotency_key)
@@ -770,11 +770,11 @@ async def find_pending_returns(
 
 @mcp.tool(annotations=READ_ONLY_EXTERNAL)
 async def confirm_return_request(
-    order_reference: Reference,
-    reason: Text = None,
-    confirm: ConfirmFlag = False,
-    confirmation_token: Text = None,
-    idempotency_key: Text = None,
+    order_reference: Annotated[str, Field(description="Order number or channel order number; leading # is accepted.")],
+    reason: Annotated[str | None, Field(description="Reason for the return request.")] = None,
+    confirm: Annotated[bool, Field(description="Whether to commit the previously previewed return request.")] = False,
+    confirmation_token: Annotated[str | None, Field(description="Signed token returned by the return-request preview.")] = None,
+    idempotency_key: Annotated[str | None, Field(description="Stable key for safely retrying the same return-request operation.")] = None,
 ):
     """Validate and preview a return request, requiring explicit confirmation; commit reports unsupported because PointNXT has no return-create endpoint."""
     return await execute_confirm_return_request(
@@ -786,8 +786,8 @@ async def confirm_return_request(
 async def create_support_ticket(
     subject: Annotated[str, Field(description="Short summary of the customer issue or operational exception.")],
     description: Annotated[str, Field(description="Detailed description of the issue and relevant context.")],
-    order_reference: Text = None,
-    idempotency_key: Text = None,
+    order_reference: Annotated[str | None, Field(description="Optional order number associated with the support ticket.")] = None,
+    idempotency_key: Annotated[str | None, Field(description="Stable key for safely retrying the same support-ticket request.")] = None,
 ):
     """Create a support ticket only if a backend ticketing integration exists; currently reports the missing capability without storing a fake ticket."""
     return await execute_create_support_ticket(

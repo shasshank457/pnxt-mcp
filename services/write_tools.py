@@ -40,6 +40,8 @@ from services.response_safety import sanitize_public_response
 
 logger = logging.getLogger(__name__)
 
+_OMITTED = "__PNXT_OMITTED__"
+
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FREE_TEXT_NAMES = frozenset({"note", "reason", "comment", "description", "message"})
 _TOKEN_EXCLUDED_ARGS = frozenset({"confirm", "confirmation_token", "idempotency_key"})
@@ -557,7 +559,7 @@ def register_write_tool(mcp: Any, spec: WriteToolSpec, framework: WriteToolFrame
 
     async def handler(**kwargs: Any) -> dict[str, Any]:
         try:
-            return await framework.invoke(spec, kwargs, _handler_context())
+            return await framework.invoke(spec, {key: value for key, value in kwargs.items() if value != _OMITTED}, _handler_context())
         except WriteError as error:
             return sanitize_public_response(error.as_dict())
 
@@ -597,8 +599,12 @@ def register_write_tool(mcp: Any, spec: WriteToolSpec, framework: WriteToolFrame
 
     for name, definition in properties.items():
         description = definition.get("description", f"Write-tool parameter {name}.")
-        annotation = Annotated[annotation_for(definition, name in required), Field(description=description)]
-        default = Parameter.empty if name in required else definition.get("default", None)
+        schema_extra = {key: value for key, value in definition.items() if key not in {"type", "description", "default"}}
+        field_kwargs = {"description": description}
+        if schema_extra:
+            field_kwargs["json_schema_extra"] = schema_extra
+        annotation = Annotated[annotation_for(definition, name in required), Field(**field_kwargs)]
+        default = Parameter.empty if name in required else definition.get("default", _OMITTED)
         parameters.append(
             Parameter(name, Parameter.KEYWORD_ONLY, annotation=annotation, default=default)
         )
